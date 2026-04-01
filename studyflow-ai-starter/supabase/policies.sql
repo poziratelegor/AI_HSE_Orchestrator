@@ -1,0 +1,3 @@
+-- TODO:
+-- add RLS policies after auth is connected
+-- user should only access own documents, tasks, conversations and runs
