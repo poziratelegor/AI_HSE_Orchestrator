@@ -7,6 +7,8 @@ type OrchestratorInput = {
   text: string;
   channel: "web" | "telegram";
   attachments?: unknown[];
+  /** Auth user id — passed from route handler, forwarded to workflows that need it (e.g. rag_qa) */
+  userId?: string;
 };
 
 export async function orchestrate(input: OrchestratorInput) {
@@ -27,7 +29,9 @@ export async function orchestrate(input: OrchestratorInput) {
     return buildFallbackResponse();
   }
 
-  const result = await executeWorkflow(classification.intent, input.text);
+  const result = await executeWorkflow(classification.intent, input.text, {
+    userId: input.userId
+  });
 
   return {
     ok: true,

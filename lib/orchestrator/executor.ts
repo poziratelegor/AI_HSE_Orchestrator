@@ -1,7 +1,16 @@
 import type { WorkflowName } from "@/lib/constants/workflows";
 import { WORKFLOW_REGISTRY } from "@/lib/orchestrator/registry";
 
-export async function executeWorkflow(intent: WorkflowName, text: string) {
+/** Optional context passed from the route handler into each workflow. */
+export interface WorkflowContext {
+  userId?: string;
+}
+
+export async function executeWorkflow(
+  intent: WorkflowName,
+  text: string,
+  ctx?: WorkflowContext
+) {
   const workflow = WORKFLOW_REGISTRY[intent];
 
   if (!workflow) {
@@ -13,5 +22,5 @@ export async function executeWorkflow(intent: WorkflowName, text: string) {
     };
   }
 
-  return workflow.run(text);
+  return workflow.run(text, ctx);
 }
