@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
+import { ERRORS } from "@/lib/api/helpers";
 import { orchestrate } from "@/lib/orchestrator/router";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
-import { ERRORS } from "@/lib/api/helpers";
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -31,7 +31,8 @@ export async function POST(request: Request) {
     const result = await orchestrate({
       text: text.trim(),
       channel: (channel as "web" | "telegram") ?? "web",
-      attachments: Array.isArray(attachments) ? attachments : []
+      attachments: Array.isArray(attachments) ? attachments : [],
+      userId: user.id
     });
 
     return NextResponse.json(result);
@@ -39,4 +40,3 @@ export async function POST(request: Request) {
     return ERRORS.INTERNAL("Ошибка оркестратора. Попробуй ещё раз.");
   }
 }
-

@@ -1,4 +1,5 @@
 import type { WorkflowName } from "@/lib/constants/workflows";
+import type { WorkflowContext } from "@/lib/orchestrator/executor";
 import { runCheatSheet } from "@/lib/services/cheatsheet";
 import { runExplainThis } from "@/lib/services/explain";
 import { runLectureInsight } from "@/lib/services/lecture-insight";
@@ -13,7 +14,7 @@ export type WorkflowDefinition = {
   keywords: string[];
   minConfidence: number;
   requiredInputs: string[];
-  run: (text: string) => Promise<unknown>;
+  run: (text: string, ctx?: WorkflowContext) => Promise<unknown>;
 };
 
 export const WORKFLOW_REGISTRY: Record<WorkflowName, WorkflowDefinition> = {
