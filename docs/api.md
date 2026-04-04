@@ -1,49 +1,41 @@
 # API
 
-## Аутентификация
+## Общие правила
 
-Все API-роуты (кроме `POST /api/telegram/webhook`) требуют авторизации.
+- Формат: JSON request/response.
+- Auth: все endpoint'ы требуют Supabase access token, **кроме** `POST /api/telegram/webhook`.
+- Header для авторизации:
 
-**Заголовок:**
-```
+```http
 Authorization: Bearer <supabase_access_token>
 ```
 
-Токен получается через Supabase JS-клиент:
-```typescript
-const { data: { session } } = await supabase.auth.getSession();
-// session.access_token → передать в Authorization header
-```
-
-При отсутствии токена или истечении сессии сервер возвращает `401`.
-
----
-
-## Формат ошибок
-
-Все ошибки имеют единый формат:
+- Единый формат ошибок:
 
 ```json
 {
   "ok": false,
-  "error": "error_code",
-  "message": "Человекочитаемое описание."
+  "error": "invalid_input",
+  "message": "Человекочитаемое описание"
 }
 ```
 
-| HTTP статус | `error` | Когда |
-|-------------|---------|-------|
-| `401` | `unauthorized` | Нет токена или токен недействителен |
-| `400` | `invalid_input` | Отсутствует обязательное поле или неверный тип |
-| `500` | `internal_error` | Ошибка на стороне сервера |
+### Типовые коды ошибок
+
+| HTTP | `error` | Смысл |
+|---|---|---|
+| 400 | `invalid_input` | Невалидный или неполный payload |
+| 401 | `unauthorized` | Нет валидной авторизации |
+| 500 | `internal_error` | Ошибка на стороне сервера |
 
 ---
 
-## POST /api/orchestrate
+## Endpoint'ы
 
-Главная точка входа в оркестратор.
+### `POST /api/orchestrate`
+Главная точка маршрутизации пользовательского текста.
 
-### Request
+**Request**
 ```json
 {
   "text": "Напиши письмо преподавателю о переносе дедлайна",
@@ -52,95 +44,45 @@ const { data: { session } } = await supabase.auth.getSession();
 }
 ```
 
-| Поле | Тип | Обязательно | Описание |
-|------|-----|-------------|----------|
-| `text` | string | ✅ | Непустая строка запроса пользователя |
-| `channel` | `"web"` \| `"telegram"` | — | По умолчанию `"web"` |
-| `attachments` | array | — | По умолчанию `[]` |
-
-### Response `200`
-```json
-{
-  "ok": true,
-  "channel": "web",
-  "intent": "letter_generator",
-  "confidence": 0.82,
-  "reason": "Найден сигнал для workflow letter_generator: письм",
-  "result": {
-    "ok": true,
-    "workflow": "letter_generator",
-    "summary": "Official letter placeholder",
-    "data": {
-      "subject": "Официальное обращение",
-      "body": "..."
-    }
-  }
-}
-```
+Поля:
+- `text` (string, required)
+- `channel` (`web | telegram`, optional, default `web`)
+- `attachments` (array, optional)
 
 ---
 
-## POST /api/upload
+### `POST /api/upload`
+Принимает метаданные документа для асинхронной обработки.
 
-Приём документа для RAG-индексирования. **Не блокирует** — обработка асинхронна.
+> Текущий scaffold: endpoint валидирует поля и возвращает `pending`, но не сохраняет файл и не запускает реальный ingestion pipeline.
 
-### Request
+**Request**
 ```json
 {
-  "title": "Лекция по математическому анализу",
+  "title": "Лекция по матанализу",
   "mimeType": "application/pdf",
   "sizeBytes": 1048576
 }
 ```
 
-| Поле | Тип | Обязательно | Описание |
-|------|-----|-------------|----------|
-| `title` | string | ✅ | Название документа |
-| `mimeType` | string | ✅ | Один из: `application/pdf`, `text/plain`, `audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/ogg` |
-| `sizeBytes` | number | — | Размер файла в байтах (проверяется лимит `MAX_UPLOAD_SIZE_MB`) |
-
-### Response `200`
-```json
-{
-  "ok": true,
-  "documentId": "uuid",
-  "status": "pending",
-  "message": "Документ принят в обработку."
-}
-```
-
 ---
 
-## POST /api/rag/query
+### `POST /api/rag/query`
+Вопрос по пользовательским материалам (workflow `rag_qa`).
 
-Вопрос по загруженным материалам пользователя.
-
-### Request
+**Request**
 ```json
 {
   "question": "Что такое интеграл Римана?"
 }
 ```
 
-### Response `200`
-```json
-{
-  "ok": true,
-  "workflow": "rag_qa",
-  "answer": "...",
-  "sources": [
-    { "documentId": "uuid", "chunkIndex": 3, "excerpt": "..." }
-  ]
-}
-```
-
 ---
 
-## POST /api/transcribe
+### `POST /api/transcribe`
+Транскрипция аудио (scaffold).
 
-Транскрипция аудио через Whisper.
-
-### Request
+**Request**
 ```json
 {
   "audioUrl": "https://...",
@@ -148,118 +90,46 @@ const { data: { session } } = await supabase.auth.getSession();
 }
 ```
 
-Необходимо передать хотя бы одно из полей: `audioUrl` или `documentId`.
+Нужно передать хотя бы одно поле: `audioUrl` или `documentId`.
 
 ---
 
-## POST /api/chat
-
+### `POST /api/chat`
 Диалоговый интерфейс поверх оркестратора.
 
-### Request
-```json
-{
-  "message": "Объясни теорему Пифагора",
-  "conversationId": "uuid"
-}
-```
+### `POST /api/letters/generate`
+Прямой вызов `letter_generator`.
 
----
+### `POST /api/tasks/extract`
+Прямой вызов `task_extractor`.
 
-## POST /api/letters/generate
+### `POST /api/planner/build`
+Прямой вызов `study_plan`.
 
-Прямой вызов workflow `letter_generator` (минуя оркестратор).
+### `POST /api/cheatsheet/generate`
+Прямой вызов `cheat_sheet`.
 
-### Request
-```json
-{
-  "text": "Прошу перенести срок сдачи курсовой работы на две недели"
-}
-```
+### `POST /api/quiz/generate`
+Прямой вызов `quiz_generator`.
 
----
+`questionCount` — optional, integer от 1 до 50.
 
-## POST /api/tasks/extract
-
-Прямой вызов workflow `task_extractor`.
-
-### Request
-```json
-{
-  "text": "До пятницы сдать реферат, до 20-го — лабораторную работу №3"
-}
-```
-
----
-
-## POST /api/planner/build
-
-Прямой вызов workflow `study_plan`.
-
-### Request
-```json
-{
-  "text": "Экзамен по квантовой механике через 10 дней, пройдено 3 из 8 тем"
-}
-```
-
----
-
-## POST /api/cheatsheet/generate
-
-Прямой вызов workflow `cheat_sheet`.
-
-### Request
-```json
-{
-  "text": "Интегралы: основные формулы и методы интегрирования"
-}
-```
-
----
-
-## POST /api/quiz/generate
-
-Прямой вызов workflow `quiz_generator`.
-
-### Request
-```json
-{
-  "text": "Тема: электромагнитная индукция",
-  "questionCount": 10
-}
-```
-
-| Поле | Тип | Обязательно | Описание |
-|------|-----|-------------|----------|
-| `text` | string | ✅ | Тема или исходный материал |
-| `questionCount` | number | — | Целое число от 1 до 50 |
-
----
-
-## POST /api/analytics/event
-
+### `POST /api/analytics/event`
 Логирование продуктового события.
 
-### Request
-```json
-{
-  "eventName": "first_workflow_success",
-  "channel": "web"
-}
-```
+---
+
+### `POST /api/telegram/webhook`
+- Не использует Supabase auth.
+- Проверяет заголовок `x-telegram-bot-api-secret-token`.
+- При успешной верификации отвечает `200 { "ok": true }`.
+
+> Важно: Telegram ожидает быстрый `200 OK`; бизнес-обработка update не должна ломать ack-механику.
 
 ---
 
-## POST /api/telegram/webhook
+## Open questions / Assumptions
 
-**Не требует Supabase-авторизации.** Аутентификация — через заголовок `x-telegram-bot-api-secret-token`.
-
-Всегда возвращает `200 OK` (требование Telegram).
-
-### Response `200`
-```json
-{ "ok": true }
-```
-
-Неверный secret-token → `401 { "ok": false, "error": "unauthorized" }`.
+1. Контракты прямых workflow endpoint'ов пока считаются временными, т.к. сервисы в основном stub.
+2. Для `/api/upload` задокументирован текущий JSON-scaffold, а не финальный multipart API.
+3. Поведение `/api/chat` и `/api/transcribe` будет уточняться после фактического подключения OpenAI/Whisper логики.
