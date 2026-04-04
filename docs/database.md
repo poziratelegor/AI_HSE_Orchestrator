@@ -1,117 +1,60 @@
 # Database
 
-## Основные сущности
+## Назначение
 
-### profiles
-Профиль студента и данные для генерации писем.
-- id
-- full_name
-- email
-- university
-- faculty
-- group_name
-- course_number
-- student_id
-- telegram_user_id
-- created_at
+Supabase/Postgres хранит пользовательские профили, документы, результаты маршрутизации, сообщения и продуктовую аналитику.
 
-### documents
-Загруженные пользователем файлы.
-- id
-- user_id
-- title
-- file_path
-- mime_type
-- source_type
-- processing_status
-- created_at
+## Основные таблицы
 
-### document_chunks
-Чанки документов для RAG.
-- id
-- document_id
-- chunk_text
-- embedding
-- chunk_index
-- created_at
+### Профиль и идентификация
+- `profiles`: базовые данные пользователя (ФИО, email, учебные атрибуты, telegram id).
 
-### conversations
-Диалоги пользователя.
-- id
-- user_id
-- channel
-- created_at
+### Документы и RAG
+- `documents`: метаданные загруженных документов и статус обработки.
+- `document_chunks`: чанки текста + embeddings для retrieval.
 
-### messages
-Сообщения внутри диалога.
-- id
-- conversation_id
-- role
-- content
-- created_at
+Рекомендуемый `processing_status`:
+- `pending`
+- `processing`
+- `ready`
+- `failed`
 
-### orchestrator_runs
-Запуски маршрутизации.
-- id
-- user_id
-- input_text
-- detected_intent
-- confidence
-- selected_workflow
-- status
-- created_at
+### Диалоги и сообщения
+- `conversations`
+- `messages`
 
-### workflow_results
-Результат выполнения workflow.
-- id
-- orchestrator_run_id
-- result_type
-- result_json
-- created_at
+### Оркестратор и результаты
+- `orchestrator_runs`: лог классификации и выбранного workflow.
+- `workflow_results`: структурированный результат выполнения.
 
-### tasks
-Задачи и дедлайны.
-- id
-- user_id
-- title
-- description
-- due_date
-- status
-- source_run_id
-- created_at
+### Задачи и дедлайны
+- `tasks`: извлечённые задачи, даты, статусы.
 
-### analytics_events
-События продуктовой аналитики.
-- id
-- user_id
-- session_id
-- event_name
-- workflow
-- intent_confidence
-- channel
-- duration_ms
-- error_code
-- meta
-- created_at
+### Аналитика
+- `analytics_events`: события продукта, в т.ч. канал, latency, ошибки.
 
-## Воронка продукта
-- landing_view
-- signup_complete
-- first_query
-- first_workflow_success
-- repeat_usage
+---
 
-## Асинхронная обработка документов
-Для документов и длинных лекций стоит хранить `processing_status` со значениями вроде:
-- pending
-- processing
-- ready
-- failed
+## Продуктовая воронка (события)
 
-Это позволяет не блокировать `/api/upload` на время чанкинга и embeddings.
+Базовый набор имён событий:
+- `landing_view`
+- `signup_complete`
+- `first_query`
+- `first_workflow_success`
+- `repeat_usage`
 
-## Дальше можно добавить
-- reminders
-- saved_outputs
-- user_settings
-- subscription / access plan
+---
+
+## Политики доступа
+
+- Миграции таблиц есть в `supabase/migrations/*`.
+- RLS-политики должны быть в `supabase/policies.sql`, но сейчас файл содержит TODO и требует доработки перед production.
+
+---
+
+## Open questions / Assumptions
+
+1. Считаем, что финальные индексы для RAG и аналитики будут добавлены после стабилизации нагрузочного профиля.
+2. Считаем, что retention-политики (`input_text`, аналитика) будут оформлены отдельной миграцией/cron-процедурой.
+3. Справочник статусов задач (`tasks.status`) пока остаётся продуктовым решением и не фиксируется в этой версии документа.
