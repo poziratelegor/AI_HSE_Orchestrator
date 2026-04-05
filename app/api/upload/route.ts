@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { trackEvent } from "@/lib/analytics/events";
+import { ANALYTICS_EVENTS } from "@/lib/constants/analytics";
 
 const ALLOWED_MIME_TYPES = [
   "application/pdf",
@@ -12,6 +14,39 @@ const ALLOWED_MIME_TYPES = [
 ];
 
 const MAX_UPLOAD_SIZE_MB = Number(process.env.MAX_UPLOAD_SIZE_MB ?? 20);
+
+async function processDocumentInBackground(input: {
+  documentId: string;
+  userId: string;
+  mimeType: string;
+  sizeBytes?: number;
+}) {
+  try {
+    // TODO: заменить на реальный pipeline chunking + embeddings.
+    void input;
+
+    void trackEvent(ANALYTICS_EVENTS.DOCUMENT_READY, {
+      userId: input.userId,
+      workflow: "document_processing",
+      channel: "web",
+      meta: {
+        documentId: input.documentId,
+        mimeType: input.mimeType
+      }
+    });
+  } catch (err) {
+    void trackEvent(ANALYTICS_EVENTS.DOCUMENT_FAILED, {
+      userId: input.userId,
+      workflow: "document_processing",
+      channel: "web",
+      errorCode: err instanceof Error ? err.name : "document_processing_failed",
+      meta: {
+        documentId: input.documentId,
+        message: err instanceof Error ? err.message : "Unknown document processing error"
+      }
+    });
+  }
+}
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -46,15 +81,31 @@ export async function POST(request: Request) {
     return ERRORS.INVALID_INPUT(`Файл превышает лимит ${MAX_UPLOAD_SIZE_MB} МБ.`);
   }
 
-  // 3. Вызов сервиса
-  // TODO: создать запись documents(status: "pending") в Supabase,
-  //       запустить chunking + embeddings через waitUntil() или очередь.
-  // Инвариант: upload НЕ БЛОКИРУЕТ — fast response, processing async.
+  const documentId = crypto.randomUUID();
+
+  void trackEvent(ANALYTICS_EVENTS.DOCUMENT_UPLOADED, {
+    userId: user.id,
+    workflow: "document_upload",
+    channel: "web",
+    meta: {
+      documentId,
+      title: title.trim(),
+      mimeType,
+      sizeBytes: typeof sizeBytes === "number" ? sizeBytes : undefined
+    }
+  });
+
+  void processDocumentInBackground({
+    documentId,
+    userId: user.id,
+    mimeType,
+    sizeBytes: typeof sizeBytes === "number" ? sizeBytes : undefined
+  });
+
   return NextResponse.json({
     ok: true,
-    documentId: null, // заменить на реальный id после записи в БД
+    documentId,
     status: "pending",
     message: "Документ принят в обработку."
   });
 }
-

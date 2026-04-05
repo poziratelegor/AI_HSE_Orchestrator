@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { runLetterGenerator } from "@/lib/services/letters";
+import { trackEvent } from "@/lib/analytics/events";
+import { ANALYTICS_EVENTS } from "@/lib/constants/analytics";
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -21,13 +24,21 @@ export async function POST(request: Request) {
     return ERRORS.INVALID_INPUT("Поле 'text' обязательно — опиши суть письма.");
   }
 
-  // 3. Вызов сервиса
-  // TODO: вызвать runLetterGenerator() из lib/services/letters.ts
-  return NextResponse.json({
-    ok: true,
-    workflow: "letter_generator",
-    data: null,
-    message: "Letter generator не реализован."
-  });
-}
+  const result = await runLetterGenerator(text.trim());
 
+  if (result.ok) {
+    void trackEvent(ANALYTICS_EVENTS.LETTER_GENERATED, {
+      userId: user.id,
+      workflow: result.workflow,
+      channel: "web",
+      meta: {
+        subject: result.data.subject,
+        generated: true
+      }
+    });
+
+    return NextResponse.json(result);
+  }
+
+  return ERRORS.INTERNAL(result.message);
+}
