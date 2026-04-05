@@ -2,12 +2,10 @@ import type { NextRequest } from "next/server";
 import { withAuthGuard } from "@/lib/supabase/middleware";
 
 /**
- * Next.js Middleware — защищает все /dashboard/* роуты.
+ * Next.js Middleware — защищает /dashboard/* и /complete-profile.
  *
  * Если пользователь не аутентифицирован → редирект на /login?next=<path>
- *
- * Публичные роуты (/, /login, /signup, /api/*, /api/telegram/webhook) не затрагиваются.
- * Финальная верификация токена происходит в каждом route handler через getUser().
+ * Публичные роуты (/, /login, /signup, /callback, /api/*) не затрагиваются.
  */
 export default function middleware(request: NextRequest) {
   return withAuthGuard(request);
@@ -15,10 +13,7 @@ export default function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Защищаем только /dashboard и его подпути.
-     * Исключаем Next.js internals и статику.
-     */
-    "/dashboard/:path*"
+    "/dashboard/:path*",
+    "/complete-profile"
   ]
 };

@@ -1,15 +1,8 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Cookie-based storage adapter for the Supabase browser client.
- *
- * Why: The plain @supabase/supabase-js client defaults to localStorage,
- * but our Next.js middleware reads auth state from HTTP cookies
- * (pattern: sb-*-auth-token). Without cookie storage the middleware
- * redirects authenticated users to /login.
- *
- * The value is URI-encoded so the middleware can safely
- * `JSON.parse(decodeURIComponent(cookie.value))`.
+ * Cookie-based storage adapter — сессия хранится в cookie, а не localStorage,
+ * чтобы middleware мог читать auth-state.
  */
 function makeCookieStorage() {
   return {
@@ -17,20 +10,15 @@ function makeCookieStorage() {
       if (typeof document === "undefined") return null;
       const name = encodeURIComponent(key) + "=";
       for (const part of document.cookie.split("; ")) {
-        if (part.startsWith(name)) {
-          return decodeURIComponent(part.slice(name.length));
-        }
+        if (part.startsWith(name)) return decodeURIComponent(part.slice(name.length));
       }
       return null;
     },
     setItem(key: string, value: string): void {
       if (typeof document === "undefined") return;
-      // 7-day session cookie, readable by middleware (no HttpOnly)
       document.cookie = [
         `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-        "path=/",
-        "max-age=604800",
-        "SameSite=Lax"
+        "path=/", "max-age=604800", "SameSite=Lax"
       ].join("; ");
     },
     removeItem(key: string): void {
@@ -43,8 +31,13 @@ function makeCookieStorage() {
 let browserClient: SupabaseClient | null = null;
 
 /**
- * Returns a singleton Supabase browser client.
- * Session is persisted to cookies so Next.js middleware can read it.
+ * Singleton Supabase browser client.
+ *
+ * Безопасен при SSR-проходе Next.js 15 (build-time):
+ * все реальные вызовы (.auth.getUser, .from() и т.д.) происходят только в
+ * useEffect и event handlers — то есть только на клиенте.
+ * При SSR без env vars возвращает placeholder-клиент, чтобы компонент
+ * мог отрендерить начальный HTML без ошибок.
  */
 export function getSupabaseBrowserClient(): SupabaseClient {
   if (browserClient) return browserClient;
@@ -52,8 +45,17 @@ export function getSupabaseBrowserClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+  // Во время SSR/build без env vars — возвращаем placeholder.
+  // Клиент не будет делать реальных запросов во время серверного рендера,
+  // поэтому это безопасно. В браузере без переменных — бросаем.
   if (!url || !anonKey) {
-    throw new Error("Supabase browser env vars are missing");
+    if (typeof window === "undefined") {
+      return createClient("https://placeholder.supabase.co", "placeholder_key_for_ssr");
+    }
+    throw new Error(
+      "Supabase browser env vars are missing. " +
+      "Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+    );
   }
 
   browserClient = createClient(url, anonKey, {
