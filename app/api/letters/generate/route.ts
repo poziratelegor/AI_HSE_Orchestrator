@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
+import { runLetterGenerator } from "@/lib/services/letters";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
 
 export async function POST(request: Request) {
-  // 1. Auth check
+  // 1. Optional auth
   const { user } = await getSupabaseUserFromRequest(request);
-  if (!user) return ERRORS.UNAUTHORIZED();
 
   // 2. Input validation
   let body: unknown;
@@ -22,12 +22,6 @@ export async function POST(request: Request) {
   }
 
   // 3. Вызов сервиса
-  // TODO: вызвать runLetterGenerator() из lib/services/letters.ts
-  return NextResponse.json({
-    ok: true,
-    workflow: "letter_generator",
-    data: null,
-    message: "Letter generator не реализован."
-  });
+  const result = await runLetterGenerator(text.trim(), { userId: user?.id });
+  return NextResponse.json(result);
 }
-
