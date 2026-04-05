@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
+import { getSupabaseServerClient, getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
 import { trackEvent } from "@/lib/analytics/events";
 import { ANALYTICS_EVENTS } from "@/lib/constants/analytics";
@@ -15,11 +15,36 @@ const ALLOWED_MIME_TYPES = [
 
 const MAX_UPLOAD_SIZE_MB = Number(process.env.MAX_UPLOAD_SIZE_MB ?? 20);
 
+async function markDocumentFailed(documentId: string, message: string) {
+  const supabase = getSupabaseServerClient();
+
+  const { error } = await supabase
+    .from("documents")
+    .update({
+      // Some environments may have these extended columns; fallback below handles base schema.
+      processing_status: "failed",
+      status: "failed",
+      error_message: message
+    })
+    .eq("id", documentId);
+
+  if (!error) return;
+
+  const { error: fallbackError } = await supabase
+    .from("documents")
+    .update({ processing_status: "failed" })
+    .eq("id", documentId);
+
+  if (fallbackError) {
+    console.error("[documents] failed status update failed:", fallbackError);
+  }
+}
+
 async function processDocumentInBackground(input: {
   documentId: string;
   userId: string;
   mimeType: string;
-  sizeBytes?: number;
+  title: string;
 }) {
   try {
     // TODO: заменить на реальный pipeline chunking + embeddings.
@@ -31,10 +56,14 @@ async function processDocumentInBackground(input: {
       channel: "web",
       meta: {
         documentId: input.documentId,
-        mimeType: input.mimeType
+        mimeType: input.mimeType,
+        title: input.title
       }
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown document processing error";
+    await markDocumentFailed(input.documentId, message);
+
     void trackEvent(ANALYTICS_EVENTS.DOCUMENT_FAILED, {
       userId: input.userId,
       workflow: "document_processing",
@@ -42,7 +71,7 @@ async function processDocumentInBackground(input: {
       errorCode: err instanceof Error ? err.name : "document_processing_failed",
       meta: {
         documentId: input.documentId,
-        message: err instanceof Error ? err.message : "Unknown document processing error"
+        message
       }
     });
   }
@@ -81,7 +110,58 @@ export async function POST(request: Request) {
     return ERRORS.INVALID_INPUT(`Файл превышает лимит ${MAX_UPLOAD_SIZE_MB} МБ.`);
   }
 
+  // 3. Insert row in documents
+  const supabase = getSupabaseServerClient();
   const documentId = crypto.randomUUID();
+  const storagePath = `${user.id}/${documentId}`;
+  const cleanTitle = title.trim();
+
+  const insertPayload = {
+    id: documentId,
+    user_id: user.id,
+    title: cleanTitle,
+    file_path: storagePath,
+    mime_type: mimeType,
+    source_type: "upload",
+    processing_status: "pending",
+    status: "pending",
+    file_size_bytes: typeof sizeBytes === "number" ? sizeBytes : undefined
+  };
+
+  let { error: insertError } = await supabase.from("documents").insert(insertPayload);
+
+  if (insertError) {
+    const fallbackPayload = {
+      id: documentId,
+      user_id: user.id,
+      title: cleanTitle,
+      file_path: storagePath,
+      mime_type: mimeType,
+      source_type: "upload",
+      processing_status: "pending"
+    };
+
+    const fallbackResult = await supabase.from("documents").insert(fallbackPayload);
+    insertError = fallbackResult.error;
+  }
+
+  if (insertError) {
+    console.error("[documents] insert failed:", insertError);
+
+    void trackEvent(ANALYTICS_EVENTS.DOCUMENT_FAILED, {
+      userId: user.id,
+      workflow: "document_upload",
+      channel: "web",
+      errorCode: "document_insert_failed",
+      meta: {
+        mimeType,
+        title: cleanTitle,
+        message: insertError.message
+      }
+    });
+
+    return ERRORS.INTERNAL("Не удалось создать запись документа.");
+  }
 
   void trackEvent(ANALYTICS_EVENTS.DOCUMENT_UPLOADED, {
     userId: user.id,
@@ -89,7 +169,7 @@ export async function POST(request: Request) {
     channel: "web",
     meta: {
       documentId,
-      title: title.trim(),
+      title: cleanTitle,
       mimeType,
       sizeBytes: typeof sizeBytes === "number" ? sizeBytes : undefined
     }
@@ -99,7 +179,7 @@ export async function POST(request: Request) {
     documentId,
     userId: user.id,
     mimeType,
-    sizeBytes: typeof sizeBytes === "number" ? sizeBytes : undefined
+    title: cleanTitle
   });
 
   return NextResponse.json({
