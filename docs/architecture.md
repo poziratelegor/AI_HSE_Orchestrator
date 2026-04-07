@@ -34,7 +34,7 @@
    - подготовка документов (chunking / embeddings / retrieval / citations);
    - текущая реализация частичная.
 
-6. **Data & integration layer** (`lib/supabase/*`, `supabase/*`, `lib/openai/*`, `lib/telegram/*`, `lib/analytics/*`)
+6. **Data & integration layer** (`lib/supabase/*`, `supabase/*`, `lib/ai/*`, `lib/telegram/*`, `lib/analytics/*`)
    - хранилище данных, внешние API и телеметрия.
 
 ## Ключевые инварианты

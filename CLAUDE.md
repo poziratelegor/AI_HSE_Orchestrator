@@ -25,7 +25,7 @@
 | Оркестратор (routing, classify, registry) | `lib/orchestrator/*` | ✅ scaffold — работает rules-based |
 | Сервисы (бизнес-логика workflow) | `lib/services/*` | ⚙️ заглушки — нужна реализация |
 | RAG pipeline | `lib/rag/*` | ⚙️ заглушки — нужна реализация |
-| OpenAI интеграция | `lib/openai/*` | ⚙️ промпты и схемы — нужна реализация |
+| OpenAI интеграция | `lib/ai/*` | ⚙️ промпты и схемы — нужна реализация |
 | Supabase клиент | `lib/supabase/*` | ✅ работает |
 | Telegram | `lib/telegram/*` | ⚙️ заглушка — нужна реализация |
 | Аналитика | `lib/analytics/*` | ⚙️ заглушка — нужна реализация |
@@ -34,7 +34,7 @@
 | БД миграция | `supabase/migrations/0001_init.sql` | ✅ готово |
 | RLS политики | `supabase/policies.sql` | ⚙️ нужна проверка и применение |
 
-**Важно:** классификатор в `lib/orchestrator/classify.ts` сейчас **rules-based** (keyword matching), НЕ LLM. Schema и промпты для LLM-классификации готовы в `lib/openai/`, но не подключены.
+**Важно:** классификатор в `lib/orchestrator/classify.ts` сейчас **rules-based** (keyword matching), НЕ LLM. Schema и промпты для LLM-классификации готовы в `lib/ai/`, но не подключены.
 
 ---
 
@@ -124,7 +124,7 @@ lib/rag/
   retrieve.ts   ← retrieveRelevantChunks() — ЗАГЛУШКА, нужен pgvector
   citations.ts  ← buildCitations() — ЗАГЛУШКА
 
-lib/openai/
+lib/ai/
   client.ts     ← OpenAI client (нужно создать)
   prompts.ts    ← системные промпты
   schemas.ts    ← JSON schema для structured output

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { DataTableShell, EmptyState, SectionCard, StatusBadge } from "@/components/dashboard/ui";
-import type { DocumentRow } from "@/lib/supabase/queries/documents";
+import type { DocumentRow } from "@/lib/repository/documents";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Props = {

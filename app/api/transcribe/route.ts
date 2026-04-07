@@ -30,7 +30,7 @@ export async function POST(request: Request) {
   }
 
   // 3. Вызов сервиса
-  // TODO: вызвать OpenAI Whisper через lib/openai/client.ts
+  // TODO: вызвать OpenAI Whisper через lib/ai/client.ts
   return NextResponse.json({
     ok: true,
     workflow: "transcribe",

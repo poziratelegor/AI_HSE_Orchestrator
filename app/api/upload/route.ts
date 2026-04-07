@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { processDocument } from "@/lib/services/ingestion";
+import { processDocument } from "@/lib/services/documents/ingestion";
 import { getSupabaseServerClient, getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
 

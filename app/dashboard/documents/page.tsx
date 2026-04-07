@@ -1,7 +1,7 @@
 import { DashboardContainer, PageHeader } from "@/components/dashboard/ui";
 import DocumentsClient from "@/app/dashboard/documents/DocumentsClient";
-import { getCurrentUserIdFromCookies } from "@/lib/supabase/queries/auth";
-import { getUserDocuments, type DocumentRow } from "@/lib/supabase/queries/documents";
+import { getCurrentUserIdFromCookies } from "@/lib/repository/auth";
+import { getUserDocuments, type DocumentRow } from "@/lib/repository/documents";
 
 export default async function DocumentsPage() {
   const userId = await getCurrentUserIdFromCookies();

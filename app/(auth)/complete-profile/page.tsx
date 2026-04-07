@@ -4,19 +4,11 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getProfile, upsertProfile } from "@/lib/supabase/profile";
+import { AuthShell, authInputClass, AuthErrorBox, AuthPrimaryButton } from "@/components/auth/AuthShell";
 import type { User } from "@supabase/supabase-js";
 
 const COURSE_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
 
-/**
- * Страница заполнения профиля после первого входа.
- *
- * Показывается когда:
- * - пользователь вошёл через Google (нет данных о факультете/группе)
- * - пользователь подтвердил email, но профиль не был создан
- *
- * Поля с уже известными данными (например, имя из Google) подставляются автоматически.
- */
 function CompleteProfileForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -35,29 +27,19 @@ function CompleteProfileForm() {
 
   const supabase = getSupabaseBrowserClient();
 
-  // Загрузить данные пользователя и существующий профиль
   useEffect(() => {
     async function init() {
       const { data: { user }, error } = await supabase.auth.getUser();
-
-      if (error || !user) {
-        router.replace("/login");
-        return;
-      }
-
+      if (error || !user) { router.replace("/login"); return; }
       setUser(user);
 
-      // Предзаполнить из существующего профиля (если есть частичные данные)
       const profile = await getProfile(user.id, supabase);
-
-      // Предзаполнить из профиля Supabase
       if (profile?.full_name) setFullName(profile.full_name);
       if (profile?.university) setUniversity(profile.university);
       if (profile?.faculty) setFaculty(profile.faculty);
       if (profile?.group_name) setGroupName(profile.group_name);
       if (profile?.course_number) setCourseNumber(profile.course_number);
 
-      // Если имя не было в profiles — взять из Google/OAuth metadata
       if (!profile?.full_name) {
         const meta = user.user_metadata ?? {};
         const metaName = (meta.full_name ?? meta.name ?? "") as string;
@@ -66,7 +48,6 @@ function CompleteProfileForm() {
 
       setInitializing(false);
     }
-
     init();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -110,100 +91,69 @@ function CompleteProfileForm() {
 
   if (initializing) {
     return (
-      <main className="mx-auto max-w-md px-6 py-16 text-center">
-        <p className="text-sm text-gray-500">Загрузка…</p>
-      </main>
+      <AuthShell>
+        <div className="py-8 text-center">
+          <p className="text-sm text-slate-500">Загрузка…</p>
+        </div>
+      </AuthShell>
     );
   }
 
   return (
-    <main className="mx-auto max-w-md px-6 py-16">
+    <AuthShell>
       <div className="mb-6">
-        <span className="text-2xl font-bold text-indigo-600">StudyFlow AI</span>
-        <h1 className="mt-4 text-2xl font-semibold text-gray-900">Заполни профиль</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Укажи данные об учёбе — они нужны для генерации писем и персонализации.
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Заполни профиль</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Данные об учёбе нужны для генерации писем и персонализации.
         </p>
       </div>
 
       <form onSubmit={handleSave} className="space-y-4">
-        {/* Имя */}
         <div>
-          <label htmlFor="fullName" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="fullName" className="block text-sm font-medium text-slate-700">
             Полное имя <span className="text-red-500">*</span>
           </label>
-          <input
-            id="fullName"
-            type="text"
-            required
-            autoComplete="name"
-            value={fullName}
-            onChange={e => setFullName(e.target.value)}
-            placeholder="Иванов Иван Иванович"
-            className={inputClass}
-          />
+          <input id="fullName" type="text" required autoComplete="name"
+            value={fullName} onChange={e => setFullName(e.target.value)}
+            placeholder="Иванов Иван Иванович" className={authInputClass} />
         </div>
 
-        {/* Университет */}
         <div>
-          <label htmlFor="university" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="university" className="block text-sm font-medium text-slate-700">
             Университет <span className="text-red-500">*</span>
           </label>
-          <input
-            id="university"
-            type="text"
-            required
-            value={university}
-            onChange={e => setUniversity(e.target.value)}
-            placeholder="МГУ им. М.В. Ломоносова"
-            className={inputClass}
-          />
+          <input id="university" type="text" required
+            value={university} onChange={e => setUniversity(e.target.value)}
+            placeholder="МГУ им. М.В. Ломоносова" className={authInputClass} />
         </div>
 
-        {/* Факультет */}
         <div>
-          <label htmlFor="faculty" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="faculty" className="block text-sm font-medium text-slate-700">
             Факультет <span className="text-red-500">*</span>
           </label>
-          <input
-            id="faculty"
-            type="text"
-            required
-            value={faculty}
-            onChange={e => setFaculty(e.target.value)}
-            placeholder="Факультет вычислительной математики и кибернетики"
-            className={inputClass}
-          />
+          <input id="faculty" type="text" required
+            value={faculty} onChange={e => setFaculty(e.target.value)}
+            placeholder="Факультет вычислительной математики" className={authInputClass} />
         </div>
 
-        {/* Группа и курс */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label htmlFor="groupName" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="groupName" className="block text-sm font-medium text-slate-700">
               Группа <span className="text-red-500">*</span>
             </label>
-            <input
-              id="groupName"
-              type="text"
-              required
-              value={groupName}
-              onChange={e => setGroupName(e.target.value)}
-              placeholder="317"
-              className={inputClass}
-            />
+            <input id="groupName" type="text" required
+              value={groupName} onChange={e => setGroupName(e.target.value)}
+              placeholder="317" className={authInputClass} />
           </div>
 
           <div>
-            <label htmlFor="courseNumber" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="courseNumber" className="block text-sm font-medium text-slate-700">
               Курс <span className="text-red-500">*</span>
             </label>
-            <select
-              id="courseNumber"
-              required
+            <select id="courseNumber" required
               value={courseNumber}
               onChange={e => setCourseNumber(e.target.value ? Number(e.target.value) : "")}
-              className={inputClass}
-            >
+              className={authInputClass}>
               <option value="">—</option>
               {COURSE_OPTIONS.map(n => (
                 <option key={n} value={n}>{n} курс</option>
@@ -212,29 +162,16 @@ function CompleteProfileForm() {
           </div>
         </div>
 
-        {error && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-        )}
+        {error && <AuthErrorBox message={error} />}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-        >
+        <AuthPrimaryButton loading={loading}>
           {loading ? "Сохраняю…" : "Сохранить и продолжить"}
-        </button>
+        </AuthPrimaryButton>
       </form>
-    </main>
+    </AuthShell>
   );
 }
 
-const inputClass =
-  "mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
-
 export default function CompleteProfilePage() {
-  return (
-    <Suspense>
-      <CompleteProfileForm />
-    </Suspense>
-  );
+  return <Suspense><CompleteProfileForm /></Suspense>;
 }

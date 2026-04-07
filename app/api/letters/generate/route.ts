@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { runLetterGenerator } from "@/lib/services/letters";
+import { runLetterGenerator } from "@/lib/services/communication/letters";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
 

@@ -1,4 +1,4 @@
-import { getOpenAIClient } from "@/lib/openai/client";
+import { getOpenAIClient } from "@/lib/ai/client";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 

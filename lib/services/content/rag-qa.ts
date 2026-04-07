@@ -1,7 +1,7 @@
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
 import { buildCitations } from "@/lib/rag/citations";
 import { retrieveRelevantChunks } from "@/lib/rag/retrieve";
-import { getOpenAIClient } from "@/lib/openai/client";
+import { getOpenAIClient } from "@/lib/ai/client";
 
 const SYSTEM_PROMPT = `
 Ты — учебный ассистент StudyFlow AI. Отвечай ТОЛЬКО на основе предоставленного контекста.

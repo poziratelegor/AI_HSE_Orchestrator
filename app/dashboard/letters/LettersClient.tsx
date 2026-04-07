@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ActionButton, EmptyState, SectionCard, StatusBadge } from "@/components/dashboard/ui";
-import type { LetterRow } from "@/lib/supabase/queries/letters";
+import type { LetterRow } from "@/lib/repository/letters";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 const RECIPIENT_LABEL: Record<string, string> = {

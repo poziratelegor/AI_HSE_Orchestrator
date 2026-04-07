@@ -1,4 +1,4 @@
-import { getOpenAIClient } from "@/lib/openai/client";
+import { getOpenAIClient } from "@/lib/ai/client";
 
 /**
  * Embeds a single string using text-embedding-3-small (1536 dims).

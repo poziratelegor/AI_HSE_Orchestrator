@@ -6,11 +6,9 @@ import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { upsertProfile } from "@/lib/supabase/profile";
 import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
+import { AuthShell, authInputClass, AuthDivider, AuthErrorBox, AuthPrimaryButton } from "@/components/auth/AuthShell";
 
 const COURSE_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
-
-const inputClass =
-  "mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500";
 
 function FormField({
   id, label, required, hint, children
@@ -19,10 +17,10 @@ function FormField({
 }) {
   return (
     <div>
-      <label htmlFor={id} className="block text-sm font-medium text-gray-700">
+      <label htmlFor={id} className="block text-sm font-medium text-slate-700">
         {label}
         {required && <span className="ml-0.5 text-red-500">*</span>}
-        {hint && <span className="ml-1.5 text-xs font-normal text-gray-400">({hint})</span>}
+        {hint && <span className="ml-1.5 text-xs font-normal text-slate-400">({hint})</span>}
       </label>
       {children}
     </div>
@@ -50,7 +48,6 @@ function SignupForm() {
 
   const supabase = getSupabaseBrowserClient();
 
-  // Если уже залогинен — редирект
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) router.replace(next);
@@ -78,18 +75,11 @@ function SignupForm() {
     setLoading(true);
     setError(null);
 
-    // Данные профиля кладём в user_metadata — callback подхватит их при email confirmation
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: {
-          full_name: fullName,
-          university,
-          faculty,
-          group_name: groupName,
-          course_number: Number(courseNumber)
-        }
+        data: { full_name: fullName, university, faculty, group_name: groupName, course_number: Number(courseNumber) }
       }
     });
 
@@ -102,7 +92,6 @@ function SignupForm() {
     const user = data.user;
     const session = data.session;
 
-    // Email confirmation выключен — сессия есть сразу
     if (session && user) {
       const { error: profileError } = await upsertProfile(user.id, {
         full_name: fullName,
@@ -115,8 +104,6 @@ function SignupForm() {
 
       router.refresh();
       if (profileError) {
-        // Профиль не создался — onboarding поможет
-        console.warn("[signup] profile upsert failed:", profileError);
         router.push(`/complete-profile?next=${encodeURIComponent(next)}`);
       } else {
         router.push(next);
@@ -124,7 +111,6 @@ function SignupForm() {
       return;
     }
 
-    // Email confirmation включён — показать экран ожидания
     setRegisteredEmail(email);
     setEmailConfirmationSent(true);
     setLoading(false);
@@ -133,145 +119,111 @@ function SignupForm() {
   async function handleGoogleSignup() {
     setLoading(true);
     setError(null);
-
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(next)}`
-      }
+      options: { redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(next)}` }
     });
-
-    if (error) {
-      setError(translateError(error.message));
-      setLoading(false);
-    }
+    if (error) { setError(translateError(error.message)); setLoading(false); }
   }
 
-  // === Email confirmation отправлен ===
   if (emailConfirmationSent) {
     return (
-      <main className="mx-auto max-w-md px-6 py-16">
-        <div className="rounded-xl border border-green-100 bg-green-50 px-6 py-8 text-center">
-          <p className="text-4xl">✉️</p>
-          <h1 className="mt-3 text-xl font-semibold text-gray-900">Подтверди email</h1>
-          <p className="mt-2 text-sm text-gray-600">
+      <AuthShell>
+        <div className="rounded-2xl border border-green-100 bg-green-50 px-6 py-8 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+              <rect x="1" y="4" width="20" height="14" rx="2.5" stroke="#16a34a" strokeWidth="1.5" opacity="0.6" />
+              <path d="m2 5 9 7 9-7" stroke="#16a34a" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <h1 className="text-lg font-semibold text-slate-900">Подтверди email</h1>
+          <p className="mt-2 text-sm text-slate-600">
             Письмо отправлено на{" "}
             <span className="font-medium text-green-700">{registeredEmail}</span>.
           </p>
-          <p className="mt-1 text-sm text-gray-500">
-            Открой его и нажми на ссылку — после этого ты войдёшь автоматически.
+          <p className="mt-1 text-xs text-slate-500">
+            Открой его и нажми на ссылку — войдёшь автоматически.
           </p>
         </div>
-        <p className="mt-6 text-center text-sm text-gray-600">
+        <p className="mt-6 text-center text-sm text-slate-500">
           Уже есть аккаунт?{" "}
-          <Link href="/login" className="font-medium text-indigo-600 hover:underline">
-            Войти
-          </Link>
+          <Link href="/login" className="font-medium text-[#003A8C] hover:underline">Войти</Link>
         </p>
-      </main>
+      </AuthShell>
     );
   }
 
-  // === Форма регистрации ===
   return (
-    <main className="mx-auto max-w-md px-6 py-16">
+    <AuthShell>
       <div className="mb-6">
-        <span className="text-2xl font-bold text-indigo-600">StudyFlow AI</span>
-        <h1 className="mt-4 text-2xl font-semibold text-gray-900">Регистрация</h1>
-        <p className="mt-1 text-sm text-gray-500">Создай аккаунт студента.</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Регистрация</h1>
+        <p className="mt-1 text-sm text-slate-500">Создай аккаунт студента.</p>
       </div>
 
-      <GoogleSignInButton
-        label="Зарегистрироваться через Google"
-        loading={loading}
-        onClick={handleGoogleSignup}
-      />
+      <GoogleSignInButton label="Зарегистрироваться через Google" loading={loading} onClick={handleGoogleSignup} />
 
-      <div className="my-5 flex items-center gap-3">
-        <hr className="flex-1 border-gray-200" />
-        <span className="text-xs text-gray-400">или заполни форму</span>
-        <hr className="flex-1 border-gray-200" />
-      </div>
+      <AuthDivider label="или заполни форму" />
 
       <form onSubmit={handleSignup} className="space-y-4">
-        {/* Личные данные */}
         <fieldset className="space-y-3">
-          <legend className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+          <legend className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
             Личные данные
           </legend>
 
           <FormField id="fullName" label="Полное имя" required>
-            <input
-              id="fullName" type="text" required autoComplete="name"
+            <input id="fullName" type="text" required autoComplete="name"
               value={fullName} onChange={e => setFullName(e.target.value)}
-              placeholder="Иванов Иван Иванович" className={inputClass}
-            />
+              placeholder="Иванов Иван Иванович" className={authInputClass} />
           </FormField>
 
           <FormField id="email" label="Email" required>
-            <input
-              id="email" type="email" required autoComplete="email"
+            <input id="email" type="email" required autoComplete="email"
               value={email} onChange={e => setEmail(e.target.value)}
-              placeholder="student@university.ru" className={inputClass}
-            />
+              placeholder="student@university.ru" className={authInputClass} />
           </FormField>
 
           <FormField id="password" label="Пароль" required hint="Не менее 6 символов">
-            <input
-              id="password" type="password" required autoComplete="new-password"
+            <input id="password" type="password" required autoComplete="new-password"
               value={password} onChange={e => setPassword(e.target.value)}
-              placeholder="••••••••" className={inputClass}
-            />
+              placeholder="••••••••" className={authInputClass} />
           </FormField>
 
           <FormField id="confirmPassword" label="Подтверди пароль" required>
-            <input
-              id="confirmPassword" type="password" required autoComplete="new-password"
+            <input id="confirmPassword" type="password" required autoComplete="new-password"
               value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
-              placeholder="••••••••" className={inputClass}
-            />
+              placeholder="••••••••" className={authInputClass} />
           </FormField>
         </fieldset>
 
-        {/* Учебные данные */}
-        <fieldset className="space-y-3 pt-2">
-          <legend className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+        <fieldset className="space-y-3 pt-1">
+          <legend className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
             Учёба
           </legend>
 
           <FormField id="university" label="Университет" required>
-            <input
-              id="university" type="text" required
+            <input id="university" type="text" required
               value={university} onChange={e => setUniversity(e.target.value)}
-              placeholder="МГУ им. М.В. Ломоносова" className={inputClass}
-            />
+              placeholder="МГУ им. М.В. Ломоносова" className={authInputClass} />
           </FormField>
 
           <FormField id="faculty" label="Факультет" required>
-            <input
-              id="faculty" type="text" required
+            <input id="faculty" type="text" required
               value={faculty} onChange={e => setFaculty(e.target.value)}
-              placeholder="Факультет вычислительной математики и кибернетики"
-              className={inputClass}
-            />
+              placeholder="Факультет вычислительной математики" className={authInputClass} />
           </FormField>
 
           <div className="grid grid-cols-2 gap-3">
             <FormField id="groupName" label="Группа" required>
-              <input
-                id="groupName" type="text" required
+              <input id="groupName" type="text" required
                 value={groupName} onChange={e => setGroupName(e.target.value)}
-                placeholder="317" className={inputClass}
-              />
+                placeholder="317" className={authInputClass} />
             </FormField>
 
             <FormField id="courseNumber" label="Курс" required>
-              <select
-                id="courseNumber" required
+              <select id="courseNumber" required
                 value={courseNumber}
                 onChange={e => setCourseNumber(e.target.value ? Number(e.target.value) : "")}
-                className={inputClass}
-              >
+                className={authInputClass}>
                 <option value="">—</option>
                 {COURSE_OPTIONS.map(n => (
                   <option key={n} value={n}>{n} курс</option>
@@ -281,25 +233,18 @@ function SignupForm() {
           </div>
         </fieldset>
 
-        {error && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-        )}
+        {error && <AuthErrorBox message={error} />}
 
-        <button
-          type="submit" disabled={loading}
-          className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-        >
+        <AuthPrimaryButton loading={loading}>
           {loading ? "Регистрирую…" : "Создать аккаунт"}
-        </button>
+        </AuthPrimaryButton>
       </form>
 
-      <p className="mt-6 text-center text-sm text-gray-600">
+      <p className="mt-6 text-center text-sm text-slate-500">
         Уже есть аккаунт?{" "}
-        <Link href="/login" className="font-medium text-indigo-600 hover:underline">
-          Войти
-        </Link>
+        <Link href="/login" className="font-medium text-[#003A8C] hover:underline">Войти</Link>
       </p>
-    </main>
+    </AuthShell>
   );
 }
 
@@ -312,9 +257,5 @@ function translateError(msg: string): string {
 }
 
 export default function SignupPage() {
-  return (
-    <Suspense>
-      <SignupForm />
-    </Suspense>
-  );
+  return <Suspense><SignupForm /></Suspense>;
 }

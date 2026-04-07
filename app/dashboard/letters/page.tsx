@@ -1,7 +1,7 @@
 import { DashboardContainer, PageHeader } from "@/components/dashboard/ui";
 import LettersClient from "@/app/dashboard/letters/LettersClient";
-import { getCurrentUserIdFromCookies } from "@/lib/supabase/queries/auth";
-import { getUserLetters, type LetterRow } from "@/lib/supabase/queries/letters";
+import { getCurrentUserIdFromCookies } from "@/lib/repository/auth";
+import { getUserLetters, type LetterRow } from "@/lib/repository/letters";
 
 export default async function LettersPage() {
   const userId = await getCurrentUserIdFromCookies();

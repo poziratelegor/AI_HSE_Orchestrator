@@ -8,8 +8,8 @@ import {
   StatCard,
   StatusBadge
 } from "@/components/dashboard/ui";
-import { getCurrentUserIdFromCookies } from "@/lib/supabase/queries/auth";
-import { getUserTasks, type TaskFilter } from "@/lib/supabase/queries/tasks";
+import { getCurrentUserIdFromCookies } from "@/lib/repository/auth";
+import { getUserTasks, type TaskFilter } from "@/lib/repository/tasks";
 
 const FILTERS: { key: TaskFilter; label: string }[] = [
   { key: "all", label: "Все" },

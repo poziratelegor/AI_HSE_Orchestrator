@@ -114,7 +114,7 @@ app/                 # Next.js app router + API handlers
 lib/orchestrator/    # intent classification, routing, execution
 lib/services/        # workflow implementations (mostly stubs)
 lib/rag/             # chunk/embed/retrieve/citations
-lib/openai/          # OpenAI client + prompts/schemas
+lib/ai/          # OpenAI client + prompts/schemas
 lib/supabase/        # Supabase client/server/middleware
 lib/telegram/        # bot + handlers
 lib/analytics/       # events/funnel/metrics

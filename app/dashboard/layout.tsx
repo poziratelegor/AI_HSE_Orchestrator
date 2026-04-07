@@ -1,14 +1,5 @@
-import Link from "next/link";
 import LogoutButton from "@/components/auth/LogoutButton";
-
-const NAV_LINKS = [
-  { href: "/dashboard", label: "Обзор" },
-  { href: "/dashboard/assistant", label: "Ассистент" },
-  { href: "/dashboard/documents", label: "Документы" },
-  { href: "/dashboard/letters", label: "Письма" },
-  { href: "/dashboard/tasks", label: "Задачи" },
-  { href: "/dashboard/analytics", label: "Аналитика" }
-];
+import { SidebarNav } from "@/components/dashboard/SidebarNav";
 
 export default function DashboardLayout({
   children
@@ -24,17 +15,7 @@ export default function DashboardLayout({
           <p className="mt-1 text-xs text-blue-100/80">Academic productivity workspace</p>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3 py-4">
-          {NAV_LINKS.map(link => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="block rounded-xl px-3 py-2 text-sm font-medium text-blue-50/90 transition-colors hover:bg-[#0A4B9D] hover:text-white"
-            >
-              {link.label}
-            </Link>
-          ))}
-        </nav>
+        <SidebarNav />
 
         <div className="border-t border-[#1C4F99] px-3 py-3">
           <LogoutButton />

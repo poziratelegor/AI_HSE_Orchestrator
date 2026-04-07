@@ -76,8 +76,8 @@
 | Сервисы (бизнес-логика workflow) | `lib/services/*` | ⚙️ все заглушки — нужна реализация |
 | RAG — chunk | `lib/rag/chunk.ts` | ⚠️ базовая реализация — overlap не реализован |
 | RAG — embed, retrieve, citations | `lib/rag/embed.ts`, `retrieve.ts`, `citations.ts` | ⚙️ заглушки |
-| OpenAI client | `lib/openai/client.ts` | ✅ реализован |
-| OpenAI prompts + schemas | `lib/openai/prompts.ts`, `schemas.ts` | ✅ определены — не подключены к сервисам |
+| OpenAI client | `lib/ai/client.ts` | ✅ реализован |
+| OpenAI prompts + schemas | `lib/ai/prompts.ts`, `schemas.ts` | ✅ определены — не подключены к сервисам |
 | LLM-классификация | — | ⚙️ не подключена (schema и промпт готовы) |
 | Supabase client (browser + server) | `lib/supabase/client.ts`, `server.ts` | ✅ работает |
 | Supabase middleware (auth guard) | `lib/supabase/middleware.ts` | ⚙️ заглушка — withAuthGuard() не работает |

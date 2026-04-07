@@ -1,13 +1,13 @@
 import type { WorkflowName } from "@/lib/constants/workflows";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
-import { runCheatSheet } from "@/lib/services/cheatsheet";
-import { runExplainThis } from "@/lib/services/explain";
-import { runLectureInsight } from "@/lib/services/lecture-insight";
-import { runLetterGenerator } from "@/lib/services/letters";
-import { runStudyPlan } from "@/lib/services/planner";
-import { runQuizGenerator } from "@/lib/services/quiz";
-import { runRagQa } from "@/lib/services/rag-qa";
-import { runTaskExtractor } from "@/lib/services/tasks";
+import { runCheatSheet } from "@/lib/services/content/cheatsheet";
+import { runExplainThis } from "@/lib/services/content/explain";
+import { runLectureInsight } from "@/lib/services/content/lecture-insight";
+import { runLetterGenerator } from "@/lib/services/communication/letters";
+import { runStudyPlan } from "@/lib/services/planning/planner";
+import { runQuizGenerator } from "@/lib/services/content/quiz";
+import { runRagQa } from "@/lib/services/content/rag-qa";
+import { runTaskExtractor } from "@/lib/services/planning/tasks";
 
 export type WorkflowDefinition = {
   name: WorkflowName;

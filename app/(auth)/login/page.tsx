@@ -7,6 +7,9 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getProfile, isProfileComplete } from "@/lib/supabase/profile";
 import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 
+const inputClass =
+  "mt-1 block w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm placeholder-slate-400 transition focus:border-[#003A8C] focus:outline-none focus:ring-2 focus:ring-[#003A8C]/20";
+
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -20,7 +23,6 @@ function LoginForm() {
 
   const supabase = getSupabaseBrowserClient();
 
-  // Если уже авторизован — редиректнуть сразу
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) router.replace(next);
@@ -53,10 +55,7 @@ function LoginForm() {
   }
 
   async function handleMagicLink() {
-    if (!email.trim()) {
-      setError("Введи email для отправки ссылки.");
-      return;
-    }
+    if (!email.trim()) { setError("Введи email для отправки ссылки."); return; }
     setLoading(true);
     setError(null);
 
@@ -66,12 +65,7 @@ function LoginForm() {
       options: { emailRedirectTo: redirectTo }
     });
 
-    if (error) {
-      setError(translateError(error.message));
-      setLoading(false);
-      return;
-    }
-
+    if (error) { setError(translateError(error.message)); setLoading(false); return; }
     setMagicLinkSent(true);
     setLoading(false);
   }
@@ -79,118 +73,97 @@ function LoginForm() {
   async function handleGoogleLogin() {
     setLoading(true);
     setError(null);
-
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(next)}`
-      }
+      options: { redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(next)}` }
     });
-
-    if (error) {
-      setError(translateError(error.message));
-      setLoading(false);
-    }
+    if (error) { setError(translateError(error.message)); setLoading(false); }
   }
 
   if (magicLinkSent) {
     return (
-      <main className="mx-auto max-w-md px-6 py-16">
-        <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-6 py-8 text-center">
-          <p className="text-4xl">📬</p>
-          <h1 className="mt-3 text-xl font-semibold text-gray-900">Проверь почту</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Мы отправили ссылку для входа на{" "}
-            <span className="font-medium text-indigo-700">{email}</span>.
+      <AuthShell>
+        <div className="rounded-2xl border border-[#003A8C]/12 bg-[#EAF1FB] px-6 py-8 text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[#003A8C]/10">
+            <MailIcon />
+          </div>
+          <h1 className="text-lg font-semibold text-slate-900">Проверь почту</h1>
+          <p className="mt-2 text-sm text-slate-600">
+            Ссылка отправлена на{" "}
+            <span className="font-medium text-[#003A8C]">{email}</span>.
           </p>
-          <p className="mt-1 text-sm text-gray-500">Открой письмо и нажми на ссылку.</p>
+          <p className="mt-1 text-xs text-slate-500">Открой письмо и нажми на ссылку для входа.</p>
         </div>
         <button
           onClick={() => { setMagicLinkSent(false); setError(null); }}
-          className="mt-5 w-full text-center text-sm text-indigo-600 hover:underline"
+          className="mt-5 w-full text-center text-sm text-[#003A8C] hover:underline"
         >
-          ← Вернуться
+          Вернуться
         </button>
-      </main>
+      </AuthShell>
     );
   }
 
   return (
-    <main className="mx-auto max-w-md px-6 py-16">
-      <div className="mb-8">
-        <span className="text-2xl font-bold text-indigo-600">StudyFlow AI</span>
-        <h1 className="mt-4 text-2xl font-semibold text-gray-900">Вход</h1>
-        <p className="mt-1 text-sm text-gray-500">Войди в свой аккаунт студента.</p>
+    <AuthShell>
+      <div className="mb-7">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Вход</h1>
+        <p className="mt-1 text-sm text-slate-500">Войди в свой аккаунт студента.</p>
       </div>
 
-      {/* Ошибка из URL (?error=... после callback) */}
       {searchParams.get("error") && !error && (
-        <div className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          {translateUrlError(searchParams.get("error")!)}
-        </div>
+        <ErrorBox message={translateUrlError(searchParams.get("error")!)} />
       )}
 
       <GoogleSignInButton label="Войти через Google" loading={loading} onClick={handleGoogleLogin} />
 
-      <div className="my-5 flex items-center gap-3">
-        <hr className="flex-1 border-gray-200" />
-        <span className="text-xs text-gray-400">или войди по email</span>
-        <hr className="flex-1 border-gray-200" />
-      </div>
+      <Divider label="или войди по email" />
 
       <form onSubmit={handlePasswordLogin} className="space-y-4">
         <div>
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email</label>
+          <label htmlFor="email" className="block text-sm font-medium text-slate-700">Email</label>
           <input
             id="email" type="email" required autoComplete="email"
             value={email} onChange={e => setEmail(e.target.value)}
-            className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            placeholder="student@university.ru"
+            className={inputClass} placeholder="student@university.ru"
           />
         </div>
 
         <div>
-          <label htmlFor="password" className="block text-sm font-medium text-gray-700">Пароль</label>
+          <label htmlFor="password" className="block text-sm font-medium text-slate-700">Пароль</label>
           <input
             id="password" type="password" required autoComplete="current-password"
             value={password} onChange={e => setPassword(e.target.value)}
-            className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            placeholder="••••••••"
+            className={inputClass} placeholder="••••••••"
           />
         </div>
 
-        {error && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-        )}
+        {error && <ErrorBox message={error} />}
 
         <button
           type="submit" disabled={loading}
-          className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          className="w-full rounded-xl bg-[#003A8C] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#0A4B9D] disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#003A8C]/40"
         >
           {loading ? "Вхожу…" : "Войти по паролю"}
         </button>
       </form>
 
-      <div className="my-4 flex items-center gap-3">
-        <hr className="flex-1 border-gray-200" />
-        <span className="text-xs text-gray-400">или</span>
-        <hr className="flex-1 border-gray-200" />
-      </div>
+      <Divider label="или" />
 
       <button
         type="button" onClick={handleMagicLink} disabled={loading}
-        className="w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+        className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50"
       >
         Войти без пароля (magic link)
       </button>
 
-      <p className="mt-6 text-center text-sm text-gray-600">
+      <p className="mt-6 text-center text-sm text-slate-500">
         Нет аккаунта?{" "}
-        <Link href="/signup" className="font-medium text-indigo-600 hover:underline">
+        <Link href="/signup" className="font-medium text-[#003A8C] hover:underline">
           Зарегистрироваться
         </Link>
       </p>
-    </main>
+    </AuthShell>
   );
 }
 
@@ -204,15 +177,83 @@ function translateError(msg: string): string {
 
 function translateUrlError(code: string): string {
   if (code === "auth_failed") return "Не удалось подтвердить вход. Попробуй ещё раз.";
-  if (code === "auth_callback") return "Ошибка при обработке ссылки. Попробуй войти снова.";
-  if (code === "config") return "Ошибка конфигурации. Обратитесь к администратору.";
+  if (code === "auth_callback") return "Ошибка при обработке ссылки. Войди снова.";
   return "Произошла ошибка при входе.";
 }
 
 export default function LoginPage() {
+  return <Suspense><LoginForm /></Suspense>;
+}
+
+function AuthShell({ children }: { children: React.ReactNode }) {
   return (
-    <Suspense>
-      <LoginForm />
-    </Suspense>
+    <div className="flex min-h-screen bg-[#F3F6FA]">
+      <div className="hidden lg:flex lg:w-[420px] lg:flex-col lg:justify-between bg-[#003A8C] px-10 py-12">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.15em] text-blue-200/60">StudyFlow</p>
+          <p className="mt-1 text-xl font-semibold text-white">AI Ассистент</p>
+        </div>
+        <div>
+          <blockquote className="text-blue-100/80 text-sm leading-relaxed">
+            Один запрос на естественном языке — система сама выбирает нужный сценарий и возвращает результат.
+          </blockquote>
+          <ul className="mt-8 space-y-3">
+            {["Генерация официальных писем", "Ответы по загруженным материалам", "Выделение задач и дедлайнов", "Конспекты лекций"].map(item => (
+              <li key={item} className="flex items-center gap-2.5 text-sm text-blue-100/70">
+                <CheckMark />
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <p className="text-xs text-blue-200/30">StudyFlow AI</p>
+      </div>
+
+      <div className="flex flex-1 items-center justify-center px-6 py-12">
+        <div className="w-full max-w-[400px]">
+          <div className="mb-8 lg:hidden">
+            <p className="text-xs font-semibold uppercase tracking-[0.15em] text-[#003A8C]/60">StudyFlow</p>
+            <p className="mt-0.5 text-lg font-semibold text-slate-900">AI Ассистент</p>
+          </div>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Divider({ label }: { label: string }) {
+  return (
+    <div className="my-5 flex items-center gap-3">
+      <hr className="flex-1 border-slate-200" />
+      <span className="text-xs text-slate-400">{label}</span>
+      <hr className="flex-1 border-slate-200" />
+    </div>
+  );
+}
+
+function ErrorBox({ message }: { message: string }) {
+  return (
+    <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
+      {message}
+    </p>
+  );
+}
+
+function MailIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+      <rect x="1" y="4" width="20" height="14" rx="2.5" stroke="#003A8C" strokeWidth="1.5" opacity="0.5" />
+      <path d="m2 5 9 7 9-7" stroke="#003A8C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CheckMark() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <circle cx="7" cy="7" r="6" fill="white" opacity="0.15" />
+      <path d="m4 7 2 2 4-4" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
