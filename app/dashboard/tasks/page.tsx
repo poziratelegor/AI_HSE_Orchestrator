@@ -1,15 +1,15 @@
 import {
   DashboardContainer,
-  DataTableShell,
   EmptyState,
   FilterBar,
   FilterPill,
   PageHeader,
-  StatCard,
-  StatusBadge
+  StatCard
 } from "@/components/dashboard/ui";
 import { getCurrentUserIdFromCookies } from "@/lib/repository/auth";
 import { getUserTasks, type TaskFilter } from "@/lib/repository/tasks";
+import { TasksKanban } from "./TasksKanban";
+import { TasksToolbar } from "./TasksToolbar";
 
 const FILTERS: { key: TaskFilter; label: string }[] = [
   { key: "all", label: "Все" },
@@ -17,31 +17,6 @@ const FILTERS: { key: TaskFilter; label: string }[] = [
   { key: "in_progress", label: "В работе" },
   { key: "done", label: "Выполненные" }
 ];
-
-const PRIORITY_LABEL: Record<string, string> = {
-  urgent: "Срочно",
-  high: "Высокий",
-  medium: "Средний",
-  low: "Низкий"
-};
-
-const PRIORITY_TONE: Record<string, "danger" | "warning" | "info" | "default"> = {
-  urgent: "danger",
-  high: "warning",
-  medium: "info",
-  low: "default"
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  in_progress: "В работе",
-  done: "Выполнено",
-  pending: "Запланировано"
-};
-
-function formatDate(dateString: string | null) {
-  if (!dateString) return "—";
-  return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(dateString));
-}
 
 function resolveFilter(filter: string | undefined): TaskFilter {
   if (!filter) return "all";
@@ -66,7 +41,10 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
     );
   }
 
-  const [allTasks, tasks] = await Promise.all([getUserTasks(userId, "all"), getUserTasks(userId, activeFilter)]);
+  const [allTasks, tasks] = await Promise.all([
+    getUserTasks(userId, "all"),
+    getUserTasks(userId, activeFilter)
+  ]);
 
   const totalCount = allTasks.length;
   const urgentCount = allTasks.filter((task) => task.priority === "urgent").length;
@@ -76,14 +54,16 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
     <DashboardContainer>
       <PageHeader
         title="Задачи"
-        subtitle="Контроль учебных задач, дедлайнов и приоритетов в едином рабочем пространстве."
+        subtitle="Перетаскивай карточки между колонками — статус сохранится автоматически."
       />
 
       <section className="mb-6 grid gap-4 md:grid-cols-3">
-        <StatCard label="Всего задач" value={String(totalCount)} hint="По всем статусам" />
-        <StatCard label="Срочные" value={String(urgentCount)} hint="Приоритет urgent" />
-        <StatCard label="Выполнено" value={String(doneCount)} hint="Статус done" />
+        <StatCard label="Всего задач" value={String(totalCount)} hint="По всем статусам" tone="info" />
+        <StatCard label="Срочные" value={String(urgentCount)} hint="Приоритет urgent" tone="danger" />
+        <StatCard label="Выполнено" value={String(doneCount)} hint="Статус done" tone="success" />
       </section>
+
+      <TasksToolbar />
 
       <FilterBar>
         {FILTERS.map((filter) => {
@@ -102,31 +82,10 @@ export default async function TasksPage({ searchParams }: { searchParams: Promis
       {tasks.length === 0 ? (
         <EmptyState
           title="Задач пока нет"
-          description="Попросите ассистента разбить цель на задачи — он сразу сформирует список с приоритетами и дедлайнами."
+          description="Попроси ассистента разбить цель на задачи — он сразу сформирует список с приоритетами и дедлайнами."
         />
       ) : (
-        <DataTableShell
-          headers={["Задача", "Описание", "Дедлайн", "Приоритет", "Статус"]}
-          rows={tasks.map((task) => (
-            <tr key={task.id} className="transition-colors hover:bg-slate-50/50">
-              <td className="px-4 py-3 text-sm font-medium text-slate-800">{task.title || "Без названия"}</td>
-              <td className="px-4 py-3 text-sm text-slate-600">{task.description || "—"}</td>
-              <td className="px-4 py-3 text-sm text-slate-600">{formatDate(task.due_date)}</td>
-              <td className="px-4 py-3 text-sm">
-                <StatusBadge
-                  label={PRIORITY_LABEL[task.priority ?? ""] ?? "Не указан"}
-                  tone={PRIORITY_TONE[task.priority ?? ""] ?? "default"}
-                />
-              </td>
-              <td className="px-4 py-3 text-sm">
-                <StatusBadge
-                  label={STATUS_LABEL[task.status ?? ""] ?? "Новый"}
-                  tone={task.status === "done" ? "success" : task.status === "in_progress" ? "warning" : "info"}
-                />
-              </td>
-            </tr>
-          ))}
-        />
+        <TasksKanban initialTasks={tasks} />
       )}
     </DashboardContainer>
   );
