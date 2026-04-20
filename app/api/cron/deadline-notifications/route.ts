@@ -1,16 +1,17 @@
 /**
  * Cron-эндпоинт: рассылка Telegram-уведомлений о приближающихся дедлайнах задач.
  *
- * Запускается из Vercel Cron (см. vercel.json) каждые 30 минут.
- * Идемпотентность: для каждой задачи проставляются notified_24h_at / notified_1h_at,
- * повторно одно и то же окно не отправится.
+ * Запускается из Vercel Cron (см. vercel.json) ежедневно в 06:00 UTC (~09:00 МСК).
+ * Hobby-план Vercel поддерживает только daily-расписание, поэтому окна выбраны
+ * под утреннюю дайджест-рассылку:
+ *   • "сегодня"  — задачи с дедлайном сегодня после now
+ *   • "завтра"   — задачи с дедлайном в течение завтрашних суток
  *
- * Защита: либо Vercel Cron шлёт заголовок `Authorization: Bearer ${CRON_SECRET}`,
- * либо во входящем запросе должен быть query-параметр ?secret=${CRON_SECRET}.
+ * Идемпотентность через колонки notified_1h_at (сегодня) и notified_24h_at (завтра):
+ * проставляем их при отправке, повторно в то же окно не уйдёт.
  *
- * Окна срабатывания:
- *   24h: due_date в (now+22h ; now+26h)  — за ~сутки
- *   1h:  due_date в (now+30m ; now+90m)  — за ~час
+ * Защита: Vercel Cron шлёт `Authorization: Bearer ${CRON_SECRET}`,
+ * либо можно дернуть руками с `?secret=${CRON_SECRET}`.
  */
 
 import { NextResponse } from "next/server";
@@ -20,7 +21,7 @@ import { sendMessage } from "@/lib/telegram/bot";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-type Window = "24h" | "1h";
+type Window = "today" | "tomorrow";
 
 type TaskRow = {
   id: string;
@@ -78,7 +79,7 @@ function formatDeadline(iso: string): string {
 function buildMessage(task: TaskRow, window: Window): string {
   const emoji = priorityEmoji(task.priority);
   const when = task.due_date ? formatDeadline(task.due_date) : "—";
-  const lead = window === "24h" ? "⏰ Дедлайн через ~24 часа" : "🚨 Дедлайн через ~1 час";
+  const lead = window === "today" ? "🚨 Дедлайн сегодня" : "⏰ Дедлайн завтра";
   return [
     `${lead}`,
     "",
@@ -101,50 +102,57 @@ export async function GET(request: Request) {
 
   const supabase = getSupabaseServerClient();
   const now = new Date();
-  const in22h = new Date(now.getTime() + 22 * 3600 * 1000);
-  const in26h = new Date(now.getTime() + 26 * 3600 * 1000);
-  const in30m = new Date(now.getTime() + 30 * 60 * 1000);
-  const in90m = new Date(now.getTime() + 90 * 60 * 1000);
 
-  // 1) Кандидаты на 24h-окно
-  const { data: tasks24, error: e24 } = await supabase
+  // Границы "сегодня" и "завтра" в МСК (UTC+3) — чтобы дайджест был привязан к
+  // календарному дню пользователя, а не к UTC. Москва без перехода на летнее время.
+  const MSK_OFFSET_MS = 3 * 3600 * 1000;
+  const mskNow = new Date(now.getTime() + MSK_OFFSET_MS);
+  const startOfTodayMsk = new Date(
+    Date.UTC(mskNow.getUTCFullYear(), mskNow.getUTCMonth(), mskNow.getUTCDate())
+  );
+  const startOfTodayUtc = new Date(startOfTodayMsk.getTime() - MSK_OFFSET_MS);
+  const startOfTomorrowUtc = new Date(startOfTodayUtc.getTime() + 24 * 3600 * 1000);
+  const startOfDayAfterUtc = new Date(startOfTodayUtc.getTime() + 48 * 3600 * 1000);
+
+  // 1) "Сегодня" — дедлайн в [now ; конец сегодняшнего дня по МСК]
+  const { data: tasksToday, error: eToday } = await supabase
     .from("tasks")
     .select("id, user_id, title, due_date, priority, notified_24h_at, notified_1h_at")
-    .gte("due_date", in22h.toISOString())
-    .lte("due_date", in26h.toISOString())
-    .is("notified_24h_at", null)
-    .neq("status", "done")
-    .neq("status", "cancelled");
-
-  if (e24) {
-    console.error("[cron/deadlines] 24h query error:", e24.message);
-    return NextResponse.json(
-      { ok: false, error: "query_failed", message: e24.message },
-      { status: 500 }
-    );
-  }
-
-  // 2) Кандидаты на 1h-окно
-  const { data: tasks1, error: e1 } = await supabase
-    .from("tasks")
-    .select("id, user_id, title, due_date, priority, notified_24h_at, notified_1h_at")
-    .gte("due_date", in30m.toISOString())
-    .lte("due_date", in90m.toISOString())
+    .gte("due_date", now.toISOString())
+    .lt("due_date", startOfTomorrowUtc.toISOString())
     .is("notified_1h_at", null)
     .neq("status", "done")
     .neq("status", "cancelled");
 
-  if (e1) {
-    console.error("[cron/deadlines] 1h query error:", e1.message);
+  if (eToday) {
+    console.error("[cron/deadlines] today query error:", eToday.message);
     return NextResponse.json(
-      { ok: false, error: "query_failed", message: e1.message },
+      { ok: false, error: "query_failed", message: eToday.message },
+      { status: 500 }
+    );
+  }
+
+  // 2) "Завтра" — дедлайн в [начало завтра ; начало послезавтра] по МСК
+  const { data: tasksTomorrow, error: eTomorrow } = await supabase
+    .from("tasks")
+    .select("id, user_id, title, due_date, priority, notified_24h_at, notified_1h_at")
+    .gte("due_date", startOfTomorrowUtc.toISOString())
+    .lt("due_date", startOfDayAfterUtc.toISOString())
+    .is("notified_24h_at", null)
+    .neq("status", "done")
+    .neq("status", "cancelled");
+
+  if (eTomorrow) {
+    console.error("[cron/deadlines] tomorrow query error:", eTomorrow.message);
+    return NextResponse.json(
+      { ok: false, error: "query_failed", message: eTomorrow.message },
       { status: 500 }
     );
   }
 
   const buckets: { task: TaskRow; window: Window }[] = [
-    ...((tasks24 ?? []) as TaskRow[]).map((t) => ({ task: t, window: "24h" as Window })),
-    ...((tasks1 ?? []) as TaskRow[]).map((t) => ({ task: t, window: "1h" as Window }))
+    ...((tasksToday ?? []) as TaskRow[]).map((t) => ({ task: t, window: "today" as Window })),
+    ...((tasksTomorrow ?? []) as TaskRow[]).map((t) => ({ task: t, window: "tomorrow" as Window }))
   ];
 
   if (buckets.length === 0) {
@@ -182,7 +190,7 @@ export async function GET(request: Request) {
     const tgId = tgByUser.get(task.user_id);
     if (!tgId) {
       // Telegram не привязан — просто помечаем как обработанное, чтобы не висело в выборке
-      const patch = window === "24h"
+      const patch = window === "tomorrow"
         ? { notified_24h_at: now.toISOString() }
         : { notified_1h_at: now.toISOString() };
       await supabase.from("tasks").update(patch).eq("id", task.id);
@@ -197,7 +205,7 @@ export async function GET(request: Request) {
         parseMode: "Markdown"
       });
 
-      const patch = window === "24h"
+      const patch = window === "tomorrow"
         ? { notified_24h_at: now.toISOString() }
         : { notified_1h_at: now.toISOString() };
       const { error: updErr } = await supabase
