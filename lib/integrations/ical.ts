@@ -140,10 +140,11 @@ export function parseIcal(ics: string): CalendarEvent[] {
         current.location = decodeIcalText(value);
         break;
       case "DTSTART":
-        current.startRaw = value.trim() || key.split(";TZID=")[1]?.split(":")[1] ?? value.trim();
         // Handle DTSTART;TZID=...:VALUE format
         if (key.includes(";")) {
           current.startRaw = line.split(":").slice(1).join(":");
+        } else {
+          current.startRaw = value.trim();
         }
         break;
       case "DTEND":
