@@ -169,10 +169,15 @@ function formatResult(result: unknown): string {
   const obj = result as Record<string, unknown>;
 
   // orchestrate возвращает { ok, intent, result: { ok, workflow, data } }
+  // или при clarification: { ok, workflow: "route_recommender", summary, data: { question } }
+  // или при recommend zone: { ok, lowConfidence, suggestion, result: { ... } }
   const inner = (obj.result ?? obj) as Record<string, unknown>;
   const data = (inner.data ?? inner) as Record<string, unknown>;
 
-  // Пытаемся извлечь читаемые поля
+  // Suggestion для recommend zone (недостаточная уверенность)
+  if (typeof obj.suggestion === "string") return obj.suggestion;
+
+  // Пытаемся извлечь читаемые поля из data
   if (typeof data.body === "string") return data.body;
   if (typeof data.summary === "string") return data.summary;
   if (typeof data.explanation === "string") return data.explanation;
