@@ -1,53 +1,102 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getProfile, isProfileComplete, upsertProfile } from "@/lib/supabase/profile";
 
+/**
+ * OAuth/Magic-link callback.
+ *
+ * Логика:
+ *  1) Клиент Supabase создан с detectSessionInUrl:true → он САМ обменяет
+ *     ?code=... на сессию при инициализации. Мы НЕ зовём exchangeCodeForSession
+ *     руками, иначе второй вызов получит уже использованный код и упадёт
+ *     с ошибкой "ссылка устарела".
+ *  2) В dev-режиме React strict mode useEffect срабатывает дважды —
+ *     защищаемся через useRef.
+ *  3) Ждём появления сессии короткими ретраями (до ~3с).
+ *  4) Любые ошибки апсёрта профиля игнорируем — пользователя в любом случае
+ *     ведём на /complete-profile, чтобы он сам заполнил анкету ВШЭ.
+ *     Из Google нельзя получить ни кампус, ни факультет, ни программу — это
+ *     нормально, что после OAuth открывается наша форма.
+ */
 function CallbackHandler() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const ranRef = useRef(false);
 
   useEffect(() => {
-    async function handleCallback() {
-      const supabase = getSupabaseBrowserClient();
-      const code = searchParams.get("code");
-      const next = searchParams.get("next") ?? "/dashboard";
+    if (ranRef.current) return;
+    ranRef.current = true;
 
-      if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) {
-          setErrorMessage("Ссылка устарела или недействительна. Попробуй войти снова.");
-          return;
-        }
+    const supabase = getSupabaseBrowserClient();
+    const next = searchParams.get("next") ?? "/dashboard";
+    const urlError = searchParams.get("error") || searchParams.get("error_description");
+
+    // Если Google/Supabase вернули ошибку прямо в URL — сразу показываем
+    if (urlError) {
+      setErrorMessage(decodeURIComponent(urlError));
+      return;
+    }
+
+    async function waitForUser(maxMs = 4000, intervalMs = 200) {
+      const deadline = Date.now() + maxMs;
+      while (Date.now() < deadline) {
+        const { data, error } = await supabase.auth.getUser();
+        if (data?.user && !error) return data.user;
+        await new Promise((r) => setTimeout(r, intervalMs));
       }
+      return null;
+    }
 
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) {
-        router.replace("/login?error=auth_failed");
+    (async () => {
+      const user = await waitForUser();
+
+      if (!user) {
+        // Авто-обмен detectSessionInUrl не сработал — возможно, код просрочен,
+        // OAuth-прерван, или нет подключения. Мягко возвращаем на /login.
+        setErrorMessage(
+          "Не удалось завершить вход через провайдера. Попробуйте ещё раз."
+        );
         return;
       }
 
-      let profile = await getProfile(user.id, supabase);
+      // Метадата от Google: name, full_name, picture, email
+      const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+      const guessedName =
+        (typeof meta.full_name === "string" && meta.full_name) ||
+        (typeof meta.name === "string" && meta.name) ||
+        null;
 
-      if (!isProfileComplete(profile)) {
-        const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
-        const hasMetaData = meta.full_name || meta.university || meta.faculty;
-
-        if (hasMetaData) {
-          await upsertProfile(user.id, {
-            full_name: typeof meta.full_name === "string" ? meta.full_name : null,
-            email: user.email ?? null,
-            university: typeof meta.university === "string" ? meta.university : null,
-            faculty: typeof meta.faculty === "string" ? meta.faculty : null,
-            group_name: typeof meta.group_name === "string" ? meta.group_name : null,
-            course_number: typeof meta.course_number === "number" ? meta.course_number : null,
-          }, supabase);
-          profile = await getProfile(user.id, supabase);
+      // Создаём минимальный профиль (без обязательных учебных полей).
+      // Все новые колонки nullable → constraint'ы БД не помешают.
+      // Если апсёрт упадёт — игнорируем и всё равно ведём на анкету.
+      try {
+        const existing = await getProfile(user.id, supabase);
+        if (!existing) {
+          await upsertProfile(
+            user.id,
+            {
+              full_name: guessedName,
+              email: user.email ?? null,
+              university: "НИУ ВШЭ"
+            },
+            supabase
+          );
         }
+      } catch {
+        // ignore — пользователь всё равно дозаполнит на /complete-profile
+      }
+
+      // Решаем куда отправить
+      let profile = null;
+      try {
+        profile = await getProfile(user.id, supabase);
+      } catch {
+        profile = null;
       }
 
       if (!isProfileComplete(profile)) {
@@ -55,10 +104,8 @@ function CallbackHandler() {
       } else {
         router.replace(next);
       }
-    }
-
-    handleCallback();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (errorMessage) {
