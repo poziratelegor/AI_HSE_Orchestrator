@@ -3,7 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const NAV_LINKS = [
+type NavLink = {
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+  exact?: boolean;
+  adminOnly?: boolean;
+};
+
+const NAV_LINKS: NavLink[] = [
   {
     href: "/dashboard",
     label: "Обзор",
@@ -71,6 +79,16 @@ const NAV_LINKS = [
     )
   },
   {
+    href: "/dashboard/profile",
+    label: "Мой профиль",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="5.5" r="3" fill="currentColor" opacity="0.85" />
+        <path d="M2 14c0-2.8 2.7-5 6-5s6 2.2 6 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+      </svg>
+    )
+  },
+  {
     href: "/dashboard/analytics",
     label: "Аналитика",
     icon: (
@@ -79,16 +97,20 @@ const NAV_LINKS = [
         <rect x="6" y="5" width="3" height="10" rx="1" fill="currentColor" opacity="0.7" />
         <rect x="11" y="2" width="3" height="13" rx="1" fill="currentColor" opacity="0.9" />
       </svg>
-    )
+    ),
+    adminOnly: true
   }
 ];
 
-export function SidebarNav() {
+export function SidebarNav({ role }: { role: "user" | "admin" | null }) {
   const pathname = usePathname();
+  const isAdmin = role === "admin";
+
+  const visibleLinks = NAV_LINKS.filter((l) => !l.adminOnly || isAdmin);
 
   return (
     <nav className="flex-1 space-y-0.5 px-3 py-4" aria-label="Основная навигация">
-      {NAV_LINKS.map((link) => {
+      {visibleLinks.map((link) => {
         const isActive = link.exact
           ? pathname === link.href
           : pathname.startsWith(link.href);
@@ -120,7 +142,12 @@ export function SidebarNav() {
             >
               {link.icon}
             </span>
-            {link.label}
+            <span className="flex-1">{link.label}</span>
+            {link.adminOnly && (
+              <span className="rounded-full bg-[var(--hse-accent)]/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--hse-accent)]">
+                admin
+              </span>
+            )}
           </Link>
         );
       })}

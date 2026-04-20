@@ -1,41 +1,50 @@
-import { cookies } from "next/headers";
+import { getSupabaseRouteClient } from "@/lib/supabase/server";
 
-function decodeJwtPayload(token: string): { sub?: string } | null {
+/**
+ * Получить ID текущего пользователя из cookies (server-side).
+ *
+ * Использует @supabase/ssr, который корректно читает чанкованные cookies
+ * (sb-{ref}-auth-token.0, .1, ...), выставленные браузерным клиентом.
+ */
+export async function getCurrentUserIdFromCookies(): Promise<string | null> {
   try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-
-    const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    const payload = Buffer.from(padded, "base64").toString("utf8");
-
-    return JSON.parse(payload) as { sub?: string };
+    const supabase = await getSupabaseRouteClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    return user?.id ?? null;
   } catch {
     return null;
   }
 }
 
-function extractAccessTokenFromCookie(rawValue: string): string | null {
+/**
+ * Получить полный объект пользователя + его роль.
+ * Для разграничения доступа в layout/страницах.
+ */
+export async function getCurrentUserWithRole(): Promise<{
+  userId: string | null;
+  role: "user" | "admin" | null;
+  fullName: string | null;
+  email: string | null;
+}> {
   try {
-    const parsed = JSON.parse(decodeURIComponent(rawValue)) as { access_token?: string };
-    return parsed.access_token ?? null;
+    const supabase = await getSupabaseRouteClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { userId: null, role: null, fullName: null, email: null };
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role, full_name")
+      .eq("id", user.id)
+      .single();
+
+    const p = (profile ?? {}) as { role?: string; full_name?: string };
+    return {
+      userId: user.id,
+      role: p.role === "admin" ? "admin" : "user",
+      fullName: p.full_name ?? null,
+      email: user.email ?? null
+    };
   } catch {
-    return rawValue;
+    return { userId: null, role: null, fullName: null, email: null };
   }
-}
-
-export async function getCurrentUserIdFromCookies(): Promise<string | null> {
-  const cookieStore = await cookies();
-
-  const authCookie = cookieStore
-    .getAll()
-    .find((cookie) => cookie.name.startsWith("sb-") && cookie.name.endsWith("-auth-token"));
-
-  if (!authCookie?.value) return null;
-
-  const token = extractAccessTokenFromCookie(authCookie.value);
-  if (!token) return null;
-
-  const payload = decodeJwtPayload(token);
-  return payload?.sub ?? null;
 }
