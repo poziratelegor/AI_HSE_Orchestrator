@@ -1,13 +1,55 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getProfile, upsertProfile } from "@/lib/supabase/profile";
-import { AuthShell, authInputClass, AuthErrorBox, AuthPrimaryButton } from "@/components/auth/AuthShell";
+import {
+  AuthShell,
+  authInputClass,
+  AuthErrorBox,
+  AuthPrimaryButton
+} from "@/components/auth/AuthShell";
+import {
+  CAMPUSES,
+  EDUCATION_LEVELS,
+  type Campus,
+  type EducationLevel,
+  getFacultiesByCampus,
+  getProgramsByFacultyAndLevel,
+  getCoursesByLevel,
+  getFacultyById,
+  findFacultyIdByName
+} from "@/lib/hse/programs";
 import type { User } from "@supabase/supabase-js";
 
-const COURSE_OPTIONS = [1, 2, 3, 4, 5, 6] as const;
+const HSE_NAME = "НИУ ВШЭ";
+const PROGRAM_OTHER = "__other__";
+
+function FormField({
+  id,
+  label,
+  required,
+  hint,
+  children
+}: {
+  id: string;
+  label: string;
+  required?: boolean;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-slate-700">
+        {label}
+        {required && <span className="ml-0.5 text-red-500">*</span>}
+        {hint && <span className="ml-1.5 text-xs font-normal text-slate-400">({hint})</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
 
 function CompleteProfileForm() {
   const router = useRouter();
@@ -16,10 +58,16 @@ function CompleteProfileForm() {
 
   const [user, setUser] = useState<User | null>(null);
   const [fullName, setFullName] = useState("");
-  const [university, setUniversity] = useState("");
-  const [faculty, setFaculty] = useState("");
-  const [groupName, setGroupName] = useState("");
+  const [campus, setCampus] = useState<Campus | "">("");
+  const [educationLevel, setEducationLevel] = useState<EducationLevel | "">("");
+  const [facultyId, setFacultyId] = useState<string>("");
+  const [programSelect, setProgramSelect] = useState<string>("");
+  const [programCustom, setProgramCustom] = useState<string>("");
   const [courseNumber, setCourseNumber] = useState<number | "">("");
+  const [groupName, setGroupName] = useState("");
+
+  // Хранит preloaded program до того, как programs (из useMemo) появятся
+  const [preloadedProgram, setPreloadedProgram] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
@@ -27,60 +75,160 @@ function CompleteProfileForm() {
 
   const supabase = getSupabaseBrowserClient();
 
+  // ─── Каскадные опции ──────────────────────────────────────────────────────
+  const faculties = useMemo(
+    () => (campus ? getFacultiesByCampus(campus as Campus) : []),
+    [campus]
+  );
+
+  const programs = useMemo(
+    () =>
+      facultyId && educationLevel
+        ? getProgramsByFacultyAndLevel(facultyId, educationLevel as EducationLevel)
+        : [],
+    [facultyId, educationLevel]
+  );
+
+  const courses = useMemo(
+    () => (educationLevel ? getCoursesByLevel(educationLevel as EducationLevel) : [1, 2, 3, 4]),
+    [educationLevel]
+  );
+
+  // ─── Подгрузка данных пользователя ────────────────────────────────────────
   useEffect(() => {
     async function init() {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error || !user) { router.replace("/login"); return; }
+      const {
+        data: { user },
+        error
+      } = await supabase.auth.getUser();
+      if (error || !user) {
+        router.replace("/login");
+        return;
+      }
       setUser(user);
 
       const profile = await getProfile(user.id, supabase);
-      if (profile?.full_name) setFullName(profile.full_name);
-      if (profile?.university) setUniversity(profile.university);
-      if (profile?.faculty) setFaculty(profile.faculty);
-      if (profile?.group_name) setGroupName(profile.group_name);
-      if (profile?.course_number) setCourseNumber(profile.course_number);
 
-      if (!profile?.full_name) {
+      // ФИО
+      if (profile?.full_name) {
+        setFullName(profile.full_name);
+      } else {
         const meta = user.user_metadata ?? {};
         const metaName = (meta.full_name ?? meta.name ?? "") as string;
         if (metaName) setFullName(metaName);
       }
 
+      // Структурированные поля (если профиль уже был обновлён по новой схеме)
+      if (profile?.campus) setCampus(profile.campus as Campus);
+      if (profile?.education_level) setEducationLevel(profile.education_level as EducationLevel);
+
+      // Faculty: если новых полей нет — пытаемся смапить старое имя
+      if (profile?.faculty) {
+        const mapped = findFacultyIdByName(
+          profile.faculty,
+          (profile.campus as Campus | undefined) ?? undefined
+        );
+        if (mapped) setFacultyId(mapped);
+      }
+
+      // Program — отложим установку до момента, когда programs появятся
+      if (profile?.program) {
+        setPreloadedProgram(profile.program);
+      }
+
+      if (profile?.course_number) setCourseNumber(profile.course_number);
+      if (profile?.group_name) setGroupName(profile.group_name);
+
       setInitializing(false);
     }
     init();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // После того как programs (для facultyId+level) посчитались — выставляем preloadedProgram
+  useEffect(() => {
+    if (!preloadedProgram || programSelect) return;
+    if (programs.length === 0) {
+      setProgramSelect(PROGRAM_OTHER);
+      setProgramCustom(preloadedProgram);
+      return;
+    }
+    if (programs.some((p) => p.name === preloadedProgram)) {
+      setProgramSelect(preloadedProgram);
+    } else {
+      setProgramSelect(PROGRAM_OTHER);
+      setProgramCustom(preloadedProgram);
+    }
+  }, [preloadedProgram, programs, programSelect]);
+
+  // ─── Каскадные сбросы ─────────────────────────────────────────────────────
+  function handleCampusChange(value: string) {
+    setCampus(value as Campus);
+    setFacultyId("");
+    setProgramSelect("");
+    setProgramCustom("");
+  }
+  function handleLevelChange(value: string) {
+    setEducationLevel(value as EducationLevel);
+    setProgramSelect("");
+    setProgramCustom("");
+    setCourseNumber("");
+  }
+  function handleFacultyChange(value: string) {
+    setFacultyId(value);
+    setProgramSelect("");
+    setProgramCustom("");
+  }
+
+  // ─── Валидация ────────────────────────────────────────────────────────────
   function validate(): string | null {
-    if (!fullName.trim()) return "Введи полное имя.";
-    if (!university.trim()) return "Введи название университета.";
-    if (!faculty.trim()) return "Введи факультет.";
-    if (!groupName.trim()) return "Введи номер или название группы.";
-    if (!courseNumber) return "Выбери номер курса.";
+    if (!fullName.trim()) return "Введите полное имя.";
+    if (!campus) return "Выберите кампус ВШЭ.";
+    if (!educationLevel) return "Выберите ступень обучения.";
+    if (!facultyId) return "Выберите факультет.";
+    if (programSelect === PROGRAM_OTHER && !programCustom.trim()) {
+      return "Введите название образовательной программы.";
+    }
+    if (!courseNumber) return "Выберите курс.";
     return null;
   }
 
+  // ─── Submit ───────────────────────────────────────────────────────────────
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
     const validationError = validate();
-    if (validationError) { setError(validationError); return; }
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     if (!user) return;
 
     setLoading(true);
     setError(null);
 
-    const { error: saveError } = await upsertProfile(user.id, {
-      full_name: fullName,
-      email: user.email ?? null,
-      university,
-      faculty,
-      group_name: groupName,
-      course_number: Number(courseNumber)
-    }, supabase);
+    const facultyObj = getFacultyById(facultyId);
+    const facultyName = facultyObj?.name ?? "";
+    const program =
+      programSelect === PROGRAM_OTHER ? programCustom.trim() : programSelect.trim();
+
+    const { error: saveError } = await upsertProfile(
+      user.id,
+      {
+        full_name: fullName.trim(),
+        email: user.email ?? null,
+        university: HSE_NAME,
+        faculty: facultyName,
+        group_name: groupName.trim() || null,
+        course_number: Number(courseNumber),
+        campus: campus as Campus,
+        education_level: educationLevel as EducationLevel,
+        program: program || null
+      },
+      supabase
+    );
 
     if (saveError) {
-      setError("Не удалось сохранить данные. Попробуй ещё раз.");
+      setError("Не удалось сохранить данные. Попробуйте ещё раз.");
       setLoading(false);
       return;
     }
@@ -102,64 +250,149 @@ function CompleteProfileForm() {
   return (
     <AuthShell>
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Заполни профиль</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+          Заполните профиль
+        </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Данные об учёбе нужны для генерации писем и персонализации.
+          Данные нужны для генерации писем в деканат и персонализации.{" "}
+          <span className="font-medium text-[var(--hse-blue)]">НИУ ВШЭ</span>.
         </p>
       </div>
 
-      <form onSubmit={handleSave} className="space-y-4">
-        <div>
-          <label htmlFor="fullName" className="block text-sm font-medium text-slate-700">
-            Полное имя <span className="text-red-500">*</span>
-          </label>
-          <input id="fullName" type="text" required autoComplete="name"
-            value={fullName} onChange={e => setFullName(e.target.value)}
-            placeholder="Иванов Иван Иванович" className={authInputClass} />
-        </div>
+      <form onSubmit={handleSave} className="space-y-5">
+        <FormField id="fullName" label="ФИО" required>
+          <input
+            id="fullName"
+            type="text"
+            required
+            autoComplete="name"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            placeholder="Иванов Иван Иванович"
+            className={authInputClass}
+          />
+        </FormField>
 
-        <div>
-          <label htmlFor="university" className="block text-sm font-medium text-slate-700">
-            Университет <span className="text-red-500">*</span>
-          </label>
-          <input id="university" type="text" required
-            value={university} onChange={e => setUniversity(e.target.value)}
-            placeholder="МГУ им. М.В. Ломоносова" className={authInputClass} />
-        </div>
-
-        <div>
-          <label htmlFor="faculty" className="block text-sm font-medium text-slate-700">
-            Факультет <span className="text-red-500">*</span>
-          </label>
-          <input id="faculty" type="text" required
-            value={faculty} onChange={e => setFaculty(e.target.value)}
-            placeholder="Факультет вычислительной математики" className={authInputClass} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label htmlFor="groupName" className="block text-sm font-medium text-slate-700">
-              Группа <span className="text-red-500">*</span>
-            </label>
-            <input id="groupName" type="text" required
-              value={groupName} onChange={e => setGroupName(e.target.value)}
-              placeholder="317" className={authInputClass} />
-          </div>
-
-          <div>
-            <label htmlFor="courseNumber" className="block text-sm font-medium text-slate-700">
-              Курс <span className="text-red-500">*</span>
-            </label>
-            <select id="courseNumber" required
-              value={courseNumber}
-              onChange={e => setCourseNumber(e.target.value ? Number(e.target.value) : "")}
-              className={authInputClass}>
-              <option value="">—</option>
-              {COURSE_OPTIONS.map(n => (
-                <option key={n} value={n}>{n} курс</option>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField id="campus" label="Кампус" required>
+            <select
+              id="campus"
+              required
+              value={campus}
+              onChange={(e) => handleCampusChange(e.target.value)}
+              className={authInputClass}
+            >
+              <option value="">— выберите —</option>
+              {CAMPUSES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
               ))}
             </select>
-          </div>
+          </FormField>
+
+          <FormField id="educationLevel" label="Ступень обучения" required>
+            <select
+              id="educationLevel"
+              required
+              value={educationLevel}
+              onChange={(e) => handleLevelChange(e.target.value)}
+              className={authInputClass}
+            >
+              <option value="">— выберите —</option>
+              {EDUCATION_LEVELS.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </FormField>
+        </div>
+
+        <FormField id="faculty" label="Факультет" required>
+          <select
+            id="faculty"
+            required
+            value={facultyId}
+            disabled={!campus}
+            onChange={(e) => handleFacultyChange(e.target.value)}
+            className={`${authInputClass} ${!campus ? "cursor-not-allowed bg-slate-50 opacity-60" : ""}`}
+          >
+            <option value="">{campus ? "— выберите факультет —" : "Сначала выберите кампус"}</option>
+            {faculties.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.shortName ? `${f.name} (${f.shortName})` : f.name}
+              </option>
+            ))}
+          </select>
+        </FormField>
+
+        <FormField id="program" label="Образовательная программа" hint="можно выбрать «Другое»">
+          <select
+            id="program"
+            value={programSelect}
+            disabled={!facultyId || !educationLevel}
+            onChange={(e) => setProgramSelect(e.target.value)}
+            className={`${authInputClass} ${!facultyId || !educationLevel ? "cursor-not-allowed bg-slate-50 opacity-60" : ""}`}
+          >
+            <option value="">
+              {!facultyId || !educationLevel
+                ? "Сначала выберите факультет и ступень"
+                : programs.length === 0
+                  ? "— нет программ для этой ступени —"
+                  : "— выберите программу —"}
+            </option>
+            {programs.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.code ? `${p.name} (${p.code})` : p.name}
+              </option>
+            ))}
+            {(facultyId && educationLevel) && (
+              <option value={PROGRAM_OTHER}>Другое (ввести вручную)</option>
+            )}
+          </select>
+
+          {programSelect === PROGRAM_OTHER && (
+            <input
+              type="text"
+              value={programCustom}
+              onChange={(e) => setProgramCustom(e.target.value)}
+              placeholder="Например: Цифровая лингвистика"
+              className={`${authInputClass} mt-2`}
+              autoFocus
+            />
+          )}
+        </FormField>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField id="courseNumber" label="Курс" required>
+            <select
+              id="courseNumber"
+              required
+              value={courseNumber}
+              disabled={!educationLevel}
+              onChange={(e) => setCourseNumber(e.target.value ? Number(e.target.value) : "")}
+              className={`${authInputClass} ${!educationLevel ? "cursor-not-allowed bg-slate-50 opacity-60" : ""}`}
+            >
+              <option value="">{educationLevel ? "— курс —" : "Сначала выберите ступень"}</option>
+              {courses.map((n) => (
+                <option key={n} value={n}>
+                  {n} курс
+                </option>
+              ))}
+            </select>
+          </FormField>
+
+          <FormField id="groupName" label="Группа" hint="опционально">
+            <input
+              id="groupName"
+              type="text"
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder="БПИ-241"
+              className={authInputClass}
+            />
+          </FormField>
         </div>
 
         {error && <AuthErrorBox message={error} />}
@@ -173,5 +406,9 @@ function CompleteProfileForm() {
 }
 
 export default function CompleteProfilePage() {
-  return <Suspense><CompleteProfileForm /></Suspense>;
+  return (
+    <Suspense>
+      <CompleteProfileForm />
+    </Suspense>
+  );
 }

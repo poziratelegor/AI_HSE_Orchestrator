@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Campus, EducationLevel } from "@/lib/hse/programs";
 
 export type ProfileData = {
   full_name?: string | null;
@@ -7,10 +8,23 @@ export type ProfileData = {
   faculty?: string | null;
   group_name?: string | null;
   course_number?: number | null;
+  /** Кампус ВШЭ (moscow / spb / nnov / perm) — добавлено в миграции 0007 */
+  campus?: Campus | string | null;
+  /** Ступень обучения (bachelor / master / specialist / phd) — добавлено в миграции 0007 */
+  education_level?: EducationLevel | string | null;
+  /** Образовательная программа — добавлено в миграции 0007 */
+  program?: string | null;
 };
+
+const PROFILE_COLUMNS =
+  "full_name, email, university, faculty, group_name, course_number, campus, education_level, program";
 
 /**
  * Профиль считается заполненным, если указаны все обязательные поля студента.
+ *
+ * Обязательные: full_name, university, faculty, course_number.
+ * Дополнительно для новых профилей: campus, education_level.
+ * group_name и program — опциональные.
  */
 export function isProfileComplete(profile: ProfileData | null): boolean {
   if (!profile) return false;
@@ -18,7 +32,6 @@ export function isProfileComplete(profile: ProfileData | null): boolean {
     profile.full_name?.trim() &&
     profile.university?.trim() &&
     profile.faculty?.trim() &&
-    profile.group_name?.trim() &&
     profile.course_number
   );
 }
@@ -33,7 +46,7 @@ export async function getProfile(
 ): Promise<ProfileData | null> {
   const { data } = await supabase
     .from("profiles")
-    .select("full_name, email, university, faculty, group_name, course_number")
+    .select(PROFILE_COLUMNS)
     .eq("id", userId)
     .single();
   return data as ProfileData | null;
