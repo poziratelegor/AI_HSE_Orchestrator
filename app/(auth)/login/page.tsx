@@ -60,7 +60,7 @@ function LoginForm() {
     setLoading(true);
     setError(null);
 
-    const redirectTo = `${window.location.origin}/callback?next=${encodeURIComponent(next)}`;
+    const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`;
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: { emailRedirectTo: redirectTo }
@@ -76,7 +76,7 @@ function LoginForm() {
     setError(null);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/callback?next=${encodeURIComponent(next)}` }
+      options: { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}` }
     });
     if (error) { setError(translateError(error.message)); setLoading(false); }
   }

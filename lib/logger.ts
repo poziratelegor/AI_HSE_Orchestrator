@@ -5,9 +5,6 @@
  * Vercel log drains, Datadog, and any log aggregation system.
  *
  * In development, logs are formatted for readability.
- *
- * If SENTRY_DSN is set, errors are also forwarded to Sentry.
- * Install @sentry/nextjs and call Sentry.init() in instrumentation.ts to enable.
  */
 
 type LogLevel = "debug" | "info" | "warn" | "error";
@@ -79,19 +76,6 @@ export function createLogger(service: string) {
         errMeta.error = String(err);
       }
       emit({ level: "error", message, service, ...errMeta, ...meta });
-
-      // Forward to Sentry if available (requires @sentry/nextjs to be installed)
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const Sentry = require("@sentry/nextjs") as {
-          captureException: (e: unknown, ctx?: unknown) => void;
-        };
-        if (err instanceof Error) {
-          Sentry.captureException(err, { extra: { ...meta, service, message } });
-        }
-      } catch {
-        // @sentry/nextjs not installed — silently skip
-      }
     }
   };
 }

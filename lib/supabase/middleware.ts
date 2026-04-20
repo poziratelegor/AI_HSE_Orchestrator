@@ -1,85 +1,51 @@
-import { NextRequest, NextResponse } from "next/server";
-
-/**
- * Извлекает payload из Supabase JWT без верификации подписи.
- *
- * Верификация подписи происходит в Supabase при вызове getUser() в route handlers.
- * В middleware нам достаточно проверить наличие и срок действия токена,
- * чтобы не делать сетевой запрос на каждый переход страницы.
- *
- * Если токен истёк или отсутствует — редиректим на /login.
- * Финальная верификация подлинности всегда происходит в route handlers через getUser().
- */
-function decodeJwtPayload(token: string): { exp?: number; sub?: string } | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    // Edge Runtime поддерживает atob()
-    const padded = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const decoded = atob(padded);
-    return JSON.parse(decoded) as { exp?: number; sub?: string };
-  } catch {
-    return null;
-  }
-}
-
-function getTokenFromRequest(request: NextRequest): string | null {
-  // Supabase JS-клиент хранит сессию в cookie вида: sb-<project-ref>-auth-token
-  // RequestCookies iterator даёт [name: string, cookie: { name, value }]
-  for (const [name, cookie] of request.cookies) {
-    if (name.startsWith("sb-") && name.endsWith("-auth-token")) {
-      const rawValue: string = cookie.value;
-      try {
-        // Значение может быть JSON: { access_token, refresh_token, ... }
-        const parsed = JSON.parse(decodeURIComponent(rawValue)) as {
-          access_token?: string;
-        };
-        if (parsed.access_token) return parsed.access_token;
-      } catch {
-        // Не JSON — само значение является токеном
-        return rawValue;
-      }
-    }
-  }
-  return null;
-}
-
-function redirectToLogin(request: NextRequest): NextResponse {
-  const loginUrl = new URL("/login", request.url);
-  loginUrl.searchParams.set("next", request.nextUrl.pathname);
-  return NextResponse.redirect(loginUrl);
-}
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
 /**
  * Guard для защищённых роутов в Next.js middleware.
  *
- * Проверяет наличие и срок действия Supabase access token из cookie.
- * При отсутствии или истечении — редиректит на /login?next=<path>.
+ * Использует @supabase/ssr → корректно читает чанкованные cookies
+ * (sb-{ref}-auth-token.0, .1, ...) и при необходимости обновляет access token.
  *
- * Финальная проверка подлинности всегда происходит в route handlers через getUser().
- *
- * Использование в /middleware.ts:
- *   import { withAuthGuard } from "@/lib/supabase/middleware";
- *   export default withAuthGuard;
- *   export const config = { matcher: ["/dashboard/:path*"] };
+ * Если пользователь не аутентифицирован → редирект на /login?next=<path>.
+ * Финальная проверка через getUser() обращается к Supabase Auth API.
  */
-export function withAuthGuard(request: NextRequest): NextResponse {
-  const token = getTokenFromRequest(request);
+export async function withAuthGuard(request: NextRequest): Promise<NextResponse> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!token) {
-    return redirectToLogin(request);
+  if (!url || !anonKey) {
+    // env vars не заданы — пропускаем (build/SSR без credentials)
+    return NextResponse.next();
   }
 
-  const payload = decodeJwtPayload(token);
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  // Создаём response, который будем возвращать (или модифицируем cookies на нём)
+  let response = NextResponse.next({ request });
 
-  if (!payload || !payload.sub) {
-    return redirectToLogin(request);
+  const supabase = createServerClient(url, anonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        for (const { name, value } of cookiesToSet) {
+          request.cookies.set(name, value);
+        }
+        response = NextResponse.next({ request });
+        for (const { name, value, options } of cookiesToSet) {
+          response.cookies.set(name, value, options as CookieOptions);
+        }
+      }
+    }
+  });
+
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("next", request.nextUrl.pathname);
+    return NextResponse.redirect(loginUrl);
   }
 
-  if (payload.exp !== undefined && payload.exp < nowSeconds) {
-    return redirectToLogin(request);
-  }
-
-  return NextResponse.next();
+  return response;
 }
