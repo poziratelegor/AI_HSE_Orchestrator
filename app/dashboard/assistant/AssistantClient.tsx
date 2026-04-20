@@ -1,0 +1,360 @@
+"use client";
+
+import { useState, useRef } from "react";
+import { SectionCard, StatusBadge, EmptyState, InlineAlert, Spinner } from "@/components/dashboard/ui";
+import { HowItWorks } from "@/components/dashboard/HowItWorks";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { toast } from "@/lib/toast";
+
+const quickScenarios = [
+  "Подготовить официальное письмо",
+  "Суммаризировать документ",
+  "Составить учебный план",
+  "Разбить цель на задачи"
+];
+
+const examples = [
+  "Составь вежливое письмо преподавателю о консультации на следующей неделе.",
+  "Выдели ключевые тезисы из методички по статистике.",
+  "Собери план подготовки к экзамену за 10 дней."
+];
+
+const recentPrompts = [
+  { text: "Подготовь ответ в учебный офис по академической справке", status: "Готово" },
+  { text: "Сделай список задач из загруженного syllabus", status: "В обработке" },
+  { text: "Сократи письмо для куратора до делового формата", status: "Готово" }
+];
+
+function renderResult(result: unknown): string {
+  if (result === null || result === undefined) return "";
+  if (typeof result === "string") return result;
+  const obj = result as Record<string, unknown>;
+  if (obj.data && typeof obj.data === "object") {
+    const data = obj.data as Record<string, unknown>;
+    if (typeof data.body === "string") return data.body;
+    if (typeof data.summary === "string") return data.summary;
+    if (typeof data.explanation === "string") return data.explanation;
+    if (typeof data.answer === "string") return data.answer;
+  }
+  if (typeof obj.message === "string" && obj.ok === false) return obj.message;
+  return JSON.stringify(result, null, 2);
+}
+
+/** Three-dot typing animation indicator */
+function TypingIndicator() {
+  return (
+    <div className="flex items-center gap-2 rounded-2xl border border-[var(--hse-border)] bg-[var(--hse-page-bg)] px-4 py-3 animate-fade-in">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--hse-light)]" aria-hidden="true">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+          <path d="M5 1C2.8 1 1 2.6 1 4.6c0 .8.3 1.6.8 2.2L1.5 9l1.8-.6c.5.2 1.1.3 1.7.3 2.2 0 4-1.6 4-3.6S7.2 1 5 1Z" fill="var(--hse-blue)" opacity="0.7"/>
+        </svg>
+      </span>
+      <span className="text-xs text-[var(--hse-text-muted)]">Анализирую запрос</span>
+      <span className="flex items-center gap-0.5 text-slate-400" aria-hidden="true">
+        <span className="typing-dot" />
+        <span className="typing-dot" />
+        <span className="typing-dot" />
+      </span>
+    </div>
+  );
+}
+
+export default function AssistantClient() {
+  const [query, setQuery] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [result, setResult] = useState<unknown | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const toggleRecording = async () => {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setError("Нет доступа к микрофону. Разрешите доступ в настройках браузера.");
+      return;
+    }
+
+    const recorder = new MediaRecorder(stream);
+    chunksRef.current = [];
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+
+      setIsTranscribing(true);
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+
+        const form = new FormData();
+        form.append("audio", blob, "recording.webm");
+
+        const res = await fetch("/api/transcribe/microphone", {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: form,
+        });
+        const data = (await res.json()) as {
+          ok: boolean;
+          transcript?: string;
+          message?: string;
+        };
+
+        if (data.ok && data.transcript) {
+          setQuery((prev) =>
+            prev ? `${prev} ${data.transcript}` : data.transcript!
+          );
+          toast.success("Речь распознана");
+        } else {
+          setError(data.message ?? "Не удалось распознать речь.");
+        }
+      } catch {
+        setError("Ошибка отправки аудио.");
+      } finally {
+        setIsTranscribing(false);
+      }
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+    setIsRecording(true);
+  };
+
+  const handleSubmit = async () => {
+    if (!query.trim()) return;
+
+    setIsLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      const response = await fetch("/api/orchestrate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ text: query.trim(), channel: "web" })
+      });
+
+      const payload = (await response.json()) as unknown;
+
+      if (!response.ok) {
+        const msg =
+          typeof (payload as { message?: unknown }).message === "string"
+            ? (payload as { message: string }).message
+            : "Не удалось обработать запрос.";
+        setError(msg);
+        toast.error(msg);
+        return;
+      }
+
+      setResult(payload);
+      toast.success("Запрос обработан успешно");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Сетевая ошибка.";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-3">
+      <div className="space-y-6 lg:col-span-2">
+        <div className="animate-slide-up">
+          <SectionCard title="Новый запрос" subtitle="Сформулируйте задачу в свободной форме.">
+            <div className="rounded-2xl border border-[var(--hse-border)] bg-[var(--hse-page-bg)] p-4 transition-colors focus-within:border-[var(--hse-blue)]/30 focus-within:bg-white">
+              <textarea
+                className="h-32 w-full resize-none bg-transparent text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none"
+                placeholder="Например: помоги подготовить письмо о переносе дедлайна с формальным тоном и краткой аргументацией."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && query.trim() && !isLoading) {
+                    e.preventDefault();
+                    void handleSubmit();
+                  }
+                }}
+              />
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-[11px] text-slate-400">
+                  {query.length > 0 ? `${query.length} симв. · ` : ""}
+                  Ctrl+Enter для отправки
+                </span>
+                <div className="flex items-center gap-2">
+                  {/* Микрофон */}
+                  <button
+                    type="button"
+                    onClick={() => void toggleRecording()}
+                    disabled={isLoading || isTranscribing}
+                    title={isRecording ? "Остановить запись" : "Записать голос"}
+                    className={`flex h-10 w-10 items-center justify-center rounded-xl transition-all duration-150
+                      ${isRecording
+                        ? "bg-[var(--hse-danger)] text-white animate-pulse"
+                        : "bg-[var(--hse-light)] text-[var(--hse-blue)] hover:bg-[var(--hse-blue)] hover:text-white"
+                      } disabled:opacity-40`}
+                  >
+                    {isTranscribing ? (
+                      <span className="flex gap-0.5">
+                        <span className="typing-dot" />
+                        <span className="typing-dot" />
+                        <span className="typing-dot" />
+                      </span>
+                    ) : isRecording ? (
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                        <rect x="2" y="2" width="10" height="10" rx="2" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                        <rect x="5" y="1.5" width="6" height="8" rx="3" />
+                        <path d="M2.5 7.5a5.5 5.5 0 0 0 11 0" />
+                        <line x1="8" y1="13" x2="8" y2="14.5" />
+                        <line x1="5.5" y1="14.5" x2="10.5" y2="14.5" />
+                      </svg>
+                    )}
+                  </button>
+                  {/* Отправить */}
+                  <button
+                    disabled={isLoading || !query.trim()}
+                    onClick={() => void handleSubmit()}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--hse-blue)] px-4 py-2 text-sm font-medium text-white transition-all duration-150 hover:bg-[var(--hse-blue-mid)] hover:-translate-y-px active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(55,75,155,0.3)] focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <>
+                        <span className="inline-flex items-center gap-0.5">
+                          <span className="typing-dot bg-white/80" />
+                          <span className="typing-dot bg-white/80" />
+                          <span className="typing-dot bg-white/80" />
+                        </span>
+                        <span className="sr-only">Формирую ответ</span>
+                      </>
+                    ) : "Отправить"}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {quickScenarios.map((item, i) => (
+                <button
+                  key={item}
+                  onClick={() => setQuery(item)}
+                  className="animate-fade-in inline-flex items-center rounded-xl border border-[var(--hse-border)] bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-all duration-150 hover:border-[var(--hse-blue)]/30 hover:bg-[var(--hse-light)] hover:text-[var(--hse-blue)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(55,75,155,0.3)]"
+                  style={{ animationDelay: `${i * 60}ms` }}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+
+            {/* Typing indicator while loading */}
+            {isLoading && (
+              <div className="mt-4">
+                <TypingIndicator />
+              </div>
+            )}
+
+            {/* Error */}
+            {error && !isLoading && (
+              <div className="mt-4 animate-fade-in">
+                <InlineAlert message={error} tone="danger" />
+              </div>
+            )}
+
+            {/* Result */}
+            {result !== null && !error && !isLoading && (
+              <div className="mt-4 animate-fade-in-scale rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100" aria-hidden="true">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="m3 6 2 2 4-4" stroke="#059669" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </span>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Результат</p>
+                </div>
+                <pre className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                  {renderResult(result)}
+                </pre>
+              </div>
+            )}
+          </SectionCard>
+        </div>
+
+        <div className="animate-slide-up delay-100">
+          <SectionCard title="Примеры запросов" subtitle="Подсказки для быстрого старта.">
+            <ul className="space-y-3">
+              {examples.map((example, i) => (
+                <li
+                  key={example}
+                  className="animate-fade-in cursor-pointer rounded-xl border border-[var(--hse-border)] px-4 py-3 text-sm text-slate-700 transition-all duration-200 hover:border-[var(--hse-blue)]/25 hover:bg-[var(--hse-light)]/40 hover:-translate-y-px hover:text-slate-900"
+                  style={{ animationDelay: `${100 + i * 80}ms` }}
+                  onClick={() => setQuery(example)}
+                >
+                  <span className="mr-2 text-[var(--hse-blue)]/40">→</span>
+                  {example}
+                </li>
+              ))}
+            </ul>
+          </SectionCard>
+        </div>
+
+        <div className="animate-slide-up delay-200">
+          <HowItWorks
+            steps={[
+              { title: "Опиши задачу своими словами", desc: "Пиши как обычно — система сама поймёт, что нужно сделать. Или нажми кнопку микрофона для голосового ввода." },
+              { title: "ИИ выбирает нужный инструмент", desc: "LLM-классификатор определяет намерение (письмо, план, анализ документа и т.д.) с точностью >90%." },
+              { title: "Ответ за 3–8 секунд", desc: "GPT обрабатывает запрос. Если ответ неточный — уточни формулировку или загрузи документ в разделе «Документы»." },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div className="animate-slide-in-right delay-150">
+        <SectionCard title="Недавние запросы" subtitle="История запросов текущей сессии.">
+          <div className="space-y-3">
+            {recentPrompts.map((item, i) => (
+              <div
+                key={item.text}
+                className="animate-fade-in cursor-pointer rounded-xl border border-[var(--hse-border)] p-3 transition-all duration-200 hover:border-[var(--hse-blue)]/20 hover:bg-[var(--hse-light)]/20 hover:-translate-y-px"
+                style={{ animationDelay: `${i * 80}ms` }}
+                onClick={() => setQuery(item.text)}
+              >
+                <p className="text-sm text-slate-800">{item.text}</p>
+                <div className="mt-2">
+                  <StatusBadge label={item.status} tone={item.status === "Готово" ? "success" : "warning"} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4">
+            <EmptyState
+              title="История ограничена"
+              description="После подключения backend здесь появится полный журнал запросов и результатов."
+            />
+          </div>
+        </SectionCard>
+      </div>
+    </div>
+  );
+}

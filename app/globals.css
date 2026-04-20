@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── HSE Color Tokens ─────────────────────────────────────────────────────── */
+:root {
+  /* Primary palette */
+  --hse-blue:       #0F2D69;  /* главный синий — сайдбар, primary CTA, заголовки */
+  --hse-blue-mid:   #374B9B;  /* средний синий — hover, акценты */
+  --hse-accent:     #0FA0D7;  /* яркий голубой — прогресс, бейджи info, active border */
+  --hse-light:      #CDDCF0;  /* светло-голубой — hover-фоны, chip-фоны */
+
+  /* Neutrals */
+  --hse-page-bg:    #F4F5F7;  /* фон страниц */
+  --hse-card-bg:    #FFFFFF;  /* фон карточек */
+  --hse-border:     #E6E7E8;  /* бордеры, разделители */
+  --hse-icon-muted: #939598;  /* иконки второстепенные */
+  --hse-text:       #111827;  /* основной текст */
+  --hse-text-muted: #6B7280;  /* вторичный текст */
+
+  /* Status colors */
+  --hse-success:    #009B64;  /* success/ready */
+  --hse-warning:    #FAB900;  /* warning/pending */
+  --hse-danger:     #E61E3C;  /* danger/failed */
+  --hse-info:       #0FA0D7;  /* info/processing */
+
+  /* Status backgrounds */
+  --hse-success-bg: #E6F5EF;
+  --hse-warning-bg: #FEF6E0;
+  --hse-danger-bg:  #FDE8EC;
+  --hse-info-bg:    #E8F6FD;
+}
+
+html, body {
+  min-height: 100%;
+}
+
+body {
+  color: var(--hse-text);
+  background: var(--hse-page-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Smooth focus for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--hse-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Remove default focus for mouse users */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Prevent layout shift from scrollbar */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* ── Skeleton shimmer ─────────────────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    #f1f5f9 25%,
+    #e2e8f0 50%,
+    #f1f5f9 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: 0.5rem;
+}
+
+/* ── Stagger helpers ──────────────────────────────────────────────────────── */
+@layer utilities {
+  .delay-75  { animation-delay: 75ms; }
+  .delay-100 { animation-delay: 100ms; }
+  .delay-150 { animation-delay: 150ms; }
+  .delay-200 { animation-delay: 200ms; }
+  .delay-300 { animation-delay: 300ms; }
+  .delay-400 { animation-delay: 400ms; }
+  .delay-500 { animation-delay: 500ms; }
+}
+
+/* ── Page-level fade-in ───────────────────────────────────────────────────── */
+.page-enter {
+  animation: fade-in 0.2s ease-out both;
+}
+
+/* ── Typing dots (used in AssistantClient) ───────────────────────────────── */
+.typing-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }

@@ -1,0 +1,66 @@
+# .cursorrules — StudyFlow AI
+# Для Cursor IDE. Claude Code использует CLAUDE.md (приоритетный файл).
+
+## Контекст проекта
+StudyFlow AI — AI-оркестратор для студентов.
+Веб-интерфейс + Telegram-бот. Пользователь описывает задачу → система классифицирует intent → запускает workflow.
+
+Полный контекст: `product.md` и `CLAUDE.md`.
+
+## Планирование до кода
+Перед написанием кода:
+1. Опиши, что понял из задачи
+2. Предложи пошаговый план
+3. Укажи, какие файлы будешь менять
+4. Жди подтверждения
+
+## Архитектурные правила
+
+**Где что лежит:**
+- `/lib/orchestrator` — classify, registry, router, executor, fallback, policies
+- `/lib/services` — бизнес-логика workflow (один файл = один workflow)
+- `/lib/rag` — chunk, embed, retrieve, citations
+- `/lib/openai` — client, prompts, schemas
+- `/lib/supabase` — client, server, middleware
+- `/lib/telegram` — bot, handlers
+- `/lib/analytics` — events, funnel, metrics
+- `/lib/constants` — идентификаторы workflow
+- `/app/api` — route handlers (только I/O + вызов сервиса)
+- `/components` — UI без бизнес-логики
+
+**Инварианты:**
+- Новый workflow → только запись в `lib/orchestrator/registry.ts`
+- Бизнес-логика → только `lib/services/*`, не в route handlers
+- Секреты (SERVICE_ROLE_KEY, OPENAI_API_KEY) → только сервер, никогда в клиент
+- OpenAI → только через `/api/*`, не из клиентских компонентов
+- `lib/services/*` вызываемы напрямую (без HTTP) — для n8n и скриптов
+- Telegram webhook → всегда отвечает `200 OK`, даже при ошибке
+- Upload → не блокирующий, document processing async
+
+## Правила написания кода
+- Маленькие функции, понятные имена
+- Не смешивать UI, логику и данные в одном файле
+- Повторяющаяся логика → в `/lib`
+- Всегда структурированная ошибка: `{ ok: false, error: "code", message: "..." }`
+- Auth check первым в каждом route handler
+- Валидация входных данных до вызова сервиса
+- Timeout для всех внешних вызовов (OpenAI: 30s)
+- try/catch вокруг LLM JSON parsing → fallback, не throw
+
+## Оркестратор
+Flow: `router.ts` → `classify.ts` → `registry.ts` → `executor.ts` → `lib/services/*`
+Пороги confidence в `lib/orchestrator/policies.ts` (execute: 0.75, recommend: 0.45).
+Классификатор сейчас rules-based (keyword matching). LLM-классификация не подключена.
+
+## Зависимости
+Запрещено устанавливать новые пакеты без явного разрешения.
+Перед предложением: объясни зачем, покажи почему нельзя без него, предложи альтернативу.
+
+## Работа с БД
+Для новых таблиц: сначала схема, затем миграция.
+Не редактировать уже применённые миграции — создавай новые.
+RLS включён для всех пользовательских таблиц.
+
+## Документирование
+При изменении архитектуры, API, схемы БД или логики оркестратора — предложи обновить docs.
+Для значимых решений → запись в `docs/adr/`.
