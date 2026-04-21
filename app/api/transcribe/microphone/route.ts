@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getOpenAIClient } from "@/lib/ai/client";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { trackEvent } from "@/lib/analytics/events";
+import { ANALYTICS_EVENTS } from "@/lib/constants/analytics";
 
 export async function POST(request: Request) {
   const { user } = await getSupabaseUserFromRequest(request);
@@ -27,6 +29,7 @@ export async function POST(request: Request) {
   }
 
   const openai = getOpenAIClient();
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
 
@@ -41,10 +44,33 @@ export async function POST(request: Request) {
     );
 
     clearTimeout(timeout);
+    void trackEvent(ANALYTICS_EVENTS.TRANSCRIBE_SUCCESS, {
+      userId: user.id,
+      channel: "web",
+      workflow: "transcribe_microphone",
+      durationMs: Date.now() - startedAt,
+      meta: {
+        source: "microphone",
+        mimeType: audioBlob.type || "audio/webm"
+      }
+    });
+
     return NextResponse.json({ ok: true, transcript: result.text });
   } catch (err: unknown) {
     clearTimeout(timeout);
     const isAbort = err instanceof Error && err.name === "AbortError";
+    void trackEvent(ANALYTICS_EVENTS.TRANSCRIBE_ERROR, {
+      userId: user.id,
+      channel: "web",
+      workflow: "transcribe_microphone",
+      durationMs: Date.now() - startedAt,
+      errorCode: isAbort ? "timeout" : "whisper_error",
+      meta: {
+        source: "microphone",
+        message: err instanceof Error ? err.message : "Unknown microphone transcribe error"
+      }
+    });
+
     return NextResponse.json(
       {
         ok: false,
