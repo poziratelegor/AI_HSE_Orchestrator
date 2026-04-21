@@ -189,21 +189,10 @@ npx tsx scripts/setup-telegram-webhook.ts
 | `POST` | `/api/orchestrate` | Текст → классификация намерения → выполнение воркфлоу |
 | `POST` | `/api/upload` | Загрузка PDF / TXT / аудио (асинхронная обработка) |
 | `GET` | `/api/documents/:id/status` | Опрос статуса обработки документа |
-| `POST` | `/api/rag/query` | Семантический вопрос-ответ по документам |
-| `POST` | `/api/chat` | Диалоговый ассистент |
-| `POST` | `/api/letters/generate` | Генерация официального письма |
-| `POST` | `/api/tasks/extract` | Извлечение задач и дедлайнов |
-| `POST` | `/api/quiz/generate` | Генерация тестовых вопросов |
-| `POST` | `/api/cheatsheet/generate` | Генерация шпаргалки |
-| `POST` | `/api/planner/build` | Составление учебного плана |
-| `POST` | `/api/lecture-notes` | Конспект по транскрипту аудио |
-| `POST` | `/api/transcribe` | Аудиофайл → текст (Whisper) |
-| `POST` | `/api/transcribe/microphone` | Запись с микрофона браузера → текст |
 | `POST` | `/api/telegram/webhook` | Обновления Telegram Bot |
-| `POST` | `/api/analytics/event` | Запись события продуктовой аналитики |
 | `GET` | `/api/health` | Health check |
 
-Полные схемы запросов/ответов → [docs/api.md](docs/api.md)
+**Полный API: [docs/api.md](docs/api.md)**
 
 ---
 
