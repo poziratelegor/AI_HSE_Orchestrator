@@ -121,7 +121,8 @@ TELEGRAM_WEBHOOK_SECRET=<случайный hex 32 байта>
 npx supabase db push
 
 # Вариант 2 — вручную (Supabase Dashboard → SQL Editor)
-# Запустить файлы из supabase/migrations/ по порядку: 0001 → 0006
+# Запустить файлы из supabase/migrations/ по порядку: 0001 → 0009
+# Правило: всегда применять все миграции по порядку до последней.
 ```
 
 ### Регистрация Telegram-вебхука (локально)
@@ -143,9 +144,12 @@ npx tsx scripts/setup-telegram-webhook.ts
 ├── lib/
 ├── components/
 ├── supabase/
-├── scripts/
-├── docs/
-├── Dockerfile
+│   ├── migrations/       # 0001_init → 0009_documents_user_cascade (актуальный полный набор)
+│   └── policies.sql      # Row Level Security политики
+│
+├── scripts/              # setup-telegram-webhook · grant-admin · ingest-documents · seed
+├── docs/                 # Архитектура · БД · API · Оркестратор · RAG · ADR
+├── Dockerfile            # 3 стадии: deps → builder → runner (node:22-alpine)
 └── docker-compose.yml
 ```
 
