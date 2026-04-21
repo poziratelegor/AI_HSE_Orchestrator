@@ -85,4 +85,65 @@ describe("GET /api/analytics/history", () => {
 
     expect(limitSpy).toHaveBeenCalledWith(20);
   });
+
+  it("maps statuses and uses fallback text for empty queryPreview", async () => {
+    mockGetSupabaseUserFromRequest.mockResolvedValue({ user: { id: "user-3" } });
+
+    const limitSpy = vi.fn().mockResolvedValue({
+      data: [
+        {
+          id: "evt-err",
+          event_name: "orchestrate_error",
+          created_at: "2026-04-20T10:00:00.000Z",
+          meta: { queryPreview: "   " },
+        },
+        {
+          id: "evt-in-progress",
+          event_name: "orchestrate_started",
+          created_at: "2026-04-20T09:00:00.000Z",
+          meta: null,
+        },
+      ],
+      error: null,
+    });
+
+    mockGetSupabaseRouteClient.mockResolvedValue({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            in: () => ({
+              order: () => ({
+                limit: limitSpy,
+              }),
+            }),
+          }),
+        }),
+      }),
+    });
+
+    const { GET } = await import("@/app/api/analytics/history/route");
+    const response = await GET(new Request("http://localhost/api/analytics/history?limit=2"));
+    const body = (await response.json()) as {
+      ok: boolean;
+      items: Array<{ id: string; text: string; status: string; createdAt: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.items).toEqual([
+      {
+        id: "evt-err",
+        text: "Запрос без текста",
+        status: "Ошибка",
+        createdAt: "2026-04-20T10:00:00.000Z",
+      },
+      {
+        id: "evt-in-progress",
+        text: "Запрос без текста",
+        status: "В обработке",
+        createdAt: "2026-04-20T09:00:00.000Z",
+      },
+    ]);
+  });
+
 });
