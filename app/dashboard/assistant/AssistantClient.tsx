@@ -38,6 +38,48 @@ type ResultView = {
   subtitle?: string;
 };
 
+function formatStudyPlan(data: Record<string, unknown>): string | null {
+  if (!Array.isArray(data.daily_plan) || data.daily_plan.length === 0) return null;
+
+  const goal = typeof data.goal === "string" && data.goal.trim() ? data.goal.trim() : "Учебный план";
+  const totalDays =
+    typeof data.total_days === "number" && Number.isFinite(data.total_days)
+      ? data.total_days
+      : data.daily_plan.length;
+
+  const planLines = data.daily_plan.map((item, index) => {
+    if (typeof item === "string") return `${index + 1}. ${item}`;
+
+    const row = item as Record<string, unknown>;
+    const day = typeof row.day === "number" ? `День ${row.day}` : `День ${index + 1}`;
+    const date = typeof row.date === "string" && row.date.trim() ? ` (${row.date})` : "";
+    const theme = typeof row.theme === "string" && row.theme.trim() ? row.theme : "Тема не указана";
+    const duration =
+      typeof row.duration_hours === "number" && Number.isFinite(row.duration_hours)
+        ? ` · ${row.duration_hours} ч`
+        : "";
+
+    const tasks =
+      Array.isArray(row.tasks) && row.tasks.length > 0
+        ? row.tasks.map((t) => `   - ${typeof t === "string" ? t : JSON.stringify(t)}`).join("\n")
+        : "   - Без уточнённых задач";
+
+    return `${day}${date}: ${theme}${duration}\n${tasks}`;
+  });
+
+  const resources =
+    Array.isArray(data.resources) && data.resources.length > 0
+      ? `\n\nРесурсы:\n${data.resources.map((r) => `- ${typeof r === "string" ? r : JSON.stringify(r)}`).join("\n")}`
+      : "";
+
+  const tips =
+    Array.isArray(data.tips) && data.tips.length > 0
+      ? `\n\nСоветы:\n${data.tips.map((t) => `- ${typeof t === "string" ? t : JSON.stringify(t)}`).join("\n")}`
+      : "";
+
+  return `${goal} (${totalDays} дн.)\n\n${planLines.join("\n\n")}${resources}${tips}`.trim();
+}
+
 function pickFromData(data: Record<string, unknown>): string | null {
   // Письмо: subject + body
   if (typeof data.body === "string" && data.body.trim()) return data.body;
@@ -68,6 +110,11 @@ function pickFromData(data: Record<string, unknown>): string | null {
   if (Array.isArray(data.points) && data.points.length > 0) {
     return data.points.map((x, i) => `${i + 1}. ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n");
   }
+
+  // Учебный план (study_plan workflow)
+  const studyPlan = formatStudyPlan(data);
+  if (studyPlan) return studyPlan;
+
   return null;
 }
 
@@ -215,9 +262,9 @@ export default function AssistantClient() {
         };
 
         if (data.ok && data.transcript) {
-          setQuery((prev) =>
-            prev ? `${prev} ${data.transcript}` : data.transcript!
-          );
+          // Для голосового UX заменяем поле целиком:
+          // это снижает риск «склейки» со старым текстом и неверной маршрутизации.
+          setQuery(data.transcript);
           toast.success("Речь распознана");
         } else {
           setError(data.message ?? "Не удалось распознать речь.");

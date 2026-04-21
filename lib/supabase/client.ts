@@ -1,5 +1,6 @@
 import { createBrowserClient } from "@supabase/ssr";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { SUPABASE_COOKIE_OPTIONS } from "@/lib/supabase/cookie-options";
 
 let browserClient: SupabaseClient | null = null;
 
@@ -29,6 +30,8 @@ export function getSupabaseBrowserClient(): SupabaseClient {
     );
   }
 
-  browserClient = createBrowserClient(url, anonKey);
+  browserClient = createBrowserClient(url, anonKey, {
+    cookieOptions: SUPABASE_COOKIE_OPTIONS
+  });
   return browserClient;
 }
