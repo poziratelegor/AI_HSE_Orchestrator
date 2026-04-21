@@ -24,6 +24,7 @@ const LINK_CODE_RATE_LIMIT = {
   limit: 3,
   windowSeconds: 60 * 60,
   action: "telegram_link_code",
+  failOpen: false,
 };
 
 export class LinkCodeRateLimitedError extends Error {
@@ -58,7 +59,13 @@ export interface LinkCodeResult {
 export async function generateLinkCode(userId: string): Promise<LinkCodeResult> {
   // Anti-bruteforce: не более 3 кодов в час.
   const rl = await checkRateLimit(`link:${userId}`, LINK_CODE_RATE_LIMIT);
-  if (!rl.allowed) throw new LinkCodeRateLimitedError();
+  if (!rl.allowed) {
+    if (rl.response.status === 429) {
+      console.warn("[telegram/link] generate rate-limited", { userId });
+      throw new LinkCodeRateLimitedError();
+    }
+    throw new Error("Сервис генерации кода временно недоступен. Попробуйте позже.");
+  }
 
   const supabase = getSupabaseServerClient();
   const code = generateCode();
@@ -106,14 +113,20 @@ export async function consumeLinkCode(
     .maybeSingle();
 
   if (lookupErr) {
+    console.error("[telegram/link] consume lookup error", {
+      telegramUserId,
+      message: lookupErr.message,
+    });
     return { ok: false, reason: "db_error", message: lookupErr.message };
   }
   if (!profile) {
+    console.warn("[telegram/link] consume failed: not_found", { telegramUserId });
     return { ok: false, reason: "not_found", message: "Код не найден или уже использован." };
   }
 
   const exp = profile.telegram_link_expires_at as string | null;
   if (exp && new Date(exp).getTime() < Date.now()) {
+    console.warn("[telegram/link] consume failed: expired", { telegramUserId });
     return { ok: false, reason: "expired", message: "Срок действия кода истёк." };
   }
 
@@ -131,6 +144,10 @@ export async function consumeLinkCode(
   );
 
   if (upsertErr) {
+    console.error("[telegram/link] consume upsert error", {
+      telegramUserId,
+      message: upsertErr.message,
+    });
     return { ok: false, reason: "db_error", message: upsertErr.message };
   }
 
@@ -140,6 +157,7 @@ export async function consumeLinkCode(
     .update({ telegram_link_code: null, telegram_link_expires_at: null })
     .eq("id", profile.id);
 
+  console.info("[telegram/link] consume success", { telegramUserId, userId: profile.id });
   return { ok: true, userId: profile.id };
 }
 

@@ -122,10 +122,17 @@ export function TasksKanban({ initialTasks }: Props) {
               "Content-Type": "application/json",
               ...(token ? { Authorization: `Bearer ${token}` } : {})
             },
-            body: JSON.stringify({ status: finalStatus })
+            body: JSON.stringify({
+              status: finalStatus,
+              expectedUpdatedAt: task.updated_at ?? undefined
+            })
           });
 
-          const payload = (await response.json()) as { ok?: boolean; message?: string };
+          const payload = (await response.json()) as {
+            ok?: boolean;
+            message?: string;
+            updatedAt?: string;
+          };
 
           if (!response.ok || payload.ok === false) {
             // Rollback
@@ -137,6 +144,11 @@ export function TasksKanban({ initialTasks }: Props) {
           }
 
           const colTitle = COLUMNS.find((c) => c.id === finalStatus)?.title ?? finalStatus;
+          if (payload.updatedAt) {
+            setTasks((prev) =>
+              prev.map((t) => (t.id === taskId ? { ...t, updated_at: payload.updatedAt } : t))
+            );
+          }
           toast.success(`Перенесено в «${colTitle}»`);
         } catch (err) {
           // Rollback on network error

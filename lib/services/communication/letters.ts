@@ -5,6 +5,17 @@ import { loadStudentContext } from "@/lib/ai/student-context";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
+const MAX_SUBJECT_LENGTH = 180;
+const DEFAULT_SUBJECT = "Официальное обращение";
+
+function normalizeSubject(subject: unknown, fallbackText: string): string {
+  const fromModel = typeof subject === "string" ? subject.trim() : "";
+  if (fromModel) return fromModel.slice(0, MAX_SUBJECT_LENGTH);
+
+  const fromPrompt = fallbackText.trim().replace(/\s+/g, " ").slice(0, MAX_SUBJECT_LENGTH);
+  return fromPrompt || DEFAULT_SUBJECT;
+}
+
 type LetterResult = {
   ok: true;
   workflow: string;
@@ -28,7 +39,7 @@ async function saveLetterDraft(params: {
     const supabase = getSupabaseServerClient();
     const payload = {
       user_id: params.userId,
-      subject: params.subject,
+      subject: params.subject.slice(0, MAX_SUBJECT_LENGTH),
       body: params.body,
       source_prompt: params.sourcePrompt,
       status: "draft"
@@ -88,7 +99,7 @@ export async function runLetterGenerator(text: string, ctx?: WorkflowContext): P
 
     try {
       const parsed = JSON.parse(clean) as { subject?: string; body?: string };
-      const subject = parsed.subject ?? "Официальное обращение";
+      const subject = normalizeSubject(parsed.subject, text);
       const body = parsed.body ?? clean;
       const letterId =
         ctx?.userId
@@ -103,7 +114,7 @@ export async function runLetterGenerator(text: string, ctx?: WorkflowContext): P
       return {
         ok: true,
         workflow: "letter_generator",
-        summary: parsed.subject ?? "Официальное письмо",
+        summary: subject,
         letterId,
         data: {
           subject,
@@ -112,11 +123,12 @@ export async function runLetterGenerator(text: string, ctx?: WorkflowContext): P
       };
     } catch {
       // JSON parse failed — use raw text as body, still a usable result
+      const subject = normalizeSubject("", text);
       const letterId =
         ctx?.userId
           ? await saveLetterDraft({
               userId: ctx.userId,
-              subject: "Официальное обращение",
+              subject,
               body: raw,
               sourcePrompt: text
             })
@@ -125,10 +137,10 @@ export async function runLetterGenerator(text: string, ctx?: WorkflowContext): P
       return {
         ok: true,
         workflow: "letter_generator",
-        summary: "Официальное письмо",
+        summary: subject,
         letterId,
         data: {
-          subject: "Официальное обращение",
+          subject,
           body: raw
         }
       };

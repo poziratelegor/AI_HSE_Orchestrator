@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { SectionCard, StatusBadge, EmptyState, InlineAlert, Spinner } from "@/components/dashboard/ui";
 import { HowItWorks } from "@/components/dashboard/HowItWorks";
 import { WorkflowPicker } from "@/components/dashboard/WorkflowPicker";
@@ -153,6 +153,17 @@ export default function AssistantClient() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden && mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
   const toggleRecording = async () => {
     if (isRecording) {
       mediaRecorderRef.current?.stop();
@@ -178,6 +189,10 @@ export default function AssistantClient() {
     recorder.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      if (blob.size === 0) {
+        setError("Пустое аудио. Запишите голос ещё раз.");
+        return;
+      }
 
       setIsTranscribing(true);
       try {
@@ -444,6 +459,9 @@ export default function AssistantClient() {
                   </button>
                 </div>
               </div>
+              <p className="mt-2 text-[11px] text-slate-400">
+                🎙️ Длинные аудио (до 5 минут) могут обрабатываться 30–60 секунд.
+              </p>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">

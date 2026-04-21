@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ActionButton, EmptyState, InlineAlert, SectionCard, Spinner, StatusBadge } from "@/components/dashboard/ui";
 import { SendEmailModal } from "@/components/letters/SendEmailModal";
@@ -50,6 +50,17 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
   const chunksRef = useRef<Blob[]>([]);
   const router = useRouter();
 
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden && mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
   const copyLetter = async (letter: LetterRow) => {
     const parts: string[] = [];
     if (letter.subject) parts.push(`Тема: ${letter.subject}`);
@@ -86,6 +97,10 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
     recorder.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      if (blob.size === 0) {
+        setError("Пустое аудио. Запишите голос ещё раз.");
+        return;
+      }
       setIsTranscribing(true);
       try {
         const supabase = getSupabaseBrowserClient();
@@ -128,13 +143,42 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
     setEditedSubject("");
   };
 
-  const saveEditing = () => {
+  const saveEditing = async () => {
     if (!editingId) return;
+
+    const normalizedSubject = editedSubject.trim().slice(0, 180);
+    const normalizedBody = editedBody;
+
+    // Optimistic локальная запись (ещё не синкнулась с БД)
+    if (editingId.startsWith("optimistic-")) {
+      setLetters((current) =>
+        current.map((l) =>
+          l.id === editingId ? { ...l, body: normalizedBody, subject: normalizedSubject } : l
+        )
+      );
+      setEditingId(null);
+      setEditedBody("");
+      setEditedSubject("");
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    const { error: updateError } = await supabase
+      .from("letters")
+      .update({ subject: normalizedSubject, body: normalizedBody })
+      .eq("id", editingId);
+
+    if (updateError) {
+      setError(`Не удалось сохранить изменения: ${updateError.message}`);
+      return;
+    }
+
     setLetters((current) =>
       current.map((l) =>
-        l.id === editingId ? { ...l, body: editedBody, subject: editedSubject } : l
+        l.id === editingId ? { ...l, body: normalizedBody, subject: normalizedSubject } : l
       )
     );
+    setError(null);
     setEditingId(null);
     setEditedBody("");
     setEditedSubject("");
@@ -287,6 +331,9 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
                 </span>
               )}
             </div>
+            <p className="text-[11px] text-slate-400">
+              🎙️ Длинные аудио (до 5 минут) могут обрабатываться 30–60 секунд.
+            </p>
             {error && <InlineAlert message={error} tone="danger" />}
           </div>
         </SectionCard>
@@ -330,6 +377,7 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
                           <div className="space-y-2">
                             <input
                               type="text"
+                              maxLength={180}
                               value={editedSubject}
                               onChange={(e) => setEditedSubject(e.target.value)}
                               className="w-full rounded-lg border border-[var(--hse-border)] bg-white px-3 py-2 text-sm text-slate-900 focus:border-[var(--hse-blue-mid)] focus:outline-none focus:ring-2 focus:ring-[rgba(55,75,155,0.15)]"
@@ -343,7 +391,7 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
                             <div className="flex gap-2">
                               <button
                                 type="button"
-                                onClick={saveEditing}
+                                onClick={() => void saveEditing()}
                                 className="rounded-xl bg-[var(--hse-blue)] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[var(--hse-blue-mid)]"
                               >
                                 Сохранить

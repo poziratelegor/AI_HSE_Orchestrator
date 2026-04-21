@@ -265,6 +265,7 @@ function CompleteProfileForm() {
             id="fullName"
             type="text"
             required
+            maxLength={120}
             autoComplete="name"
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
@@ -387,6 +388,7 @@ function CompleteProfileForm() {
             <input
               id="groupName"
               type="text"
+              maxLength={32}
               value={groupName}
               onChange={(e) => setGroupName(e.target.value)}
               placeholder="БПИ-241"

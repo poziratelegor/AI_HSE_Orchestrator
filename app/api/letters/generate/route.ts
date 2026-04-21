@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { runLetterGenerator } from "@/lib/services/communication/letters";
-import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
+import { getSupabaseServerClient, getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/api/rate-limit";
+import { getProfile, isProfileComplete } from "@/lib/supabase/profile";
 
 const MAX_INPUT_LENGTH = 10_000; // символов — письмо не должно быть «лекцией»
 
@@ -10,6 +11,15 @@ export async function POST(request: Request) {
   // 1. Auth обязателен — сгенерированные письма персонализируются по профилю
   const { user } = await getSupabaseUserFromRequest(request);
   if (!user) return ERRORS.UNAUTHORIZED();
+
+  // 1.1 Profile gate: task/letter workflows доступны только с заполненным профилем
+  const supabase = getSupabaseServerClient();
+  const profile = await getProfile(user.id, supabase);
+  if (!isProfileComplete(profile)) {
+    return ERRORS.INVALID_INPUT(
+      "Перед генерацией письма заполните профиль: ФИО, факультет и курс."
+    );
+  }
 
   // 2. Rate-limit
   const rl = await checkRateLimit(user.id, RATE_LIMITS.orchestrate);

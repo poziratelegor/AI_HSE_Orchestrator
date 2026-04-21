@@ -145,18 +145,42 @@ export default function ProfilePage() {
   }, [preloadedProgram, programs, programSelect]);
 
   function handleCampusChange(value: string) {
+    const willReset = !!(facultyId || programSelect || programCustom);
+    if (
+      willReset &&
+      value !== campus &&
+      !window.confirm("Смена кампуса сбросит факультет и программу. Продолжить?")
+    ) {
+      return;
+    }
     setCampus(value as Campus);
     setFacultyId("");
     setProgramSelect("");
     setProgramCustom("");
   }
   function handleLevelChange(value: string) {
+    const willReset = !!(programSelect || programCustom || courseNumber);
+    if (
+      willReset &&
+      value !== educationLevel &&
+      !window.confirm("Смена ступени сбросит программу и курс. Продолжить?")
+    ) {
+      return;
+    }
     setEducationLevel(value as EducationLevel);
     setProgramSelect("");
     setProgramCustom("");
     setCourseNumber("");
   }
   function handleFacultyChange(value: string) {
+    const willReset = !!(programSelect || programCustom);
+    if (
+      willReset &&
+      value !== facultyId &&
+      !window.confirm("Смена факультета сбросит выбранную программу. Продолжить?")
+    ) {
+      return;
+    }
     setFacultyId(value);
     setProgramSelect("");
     setProgramCustom("");
@@ -248,6 +272,7 @@ export default function ProfilePage() {
                 id="fullName"
                 type="text"
                 required
+                maxLength={120}
                 autoComplete="name"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
@@ -369,6 +394,7 @@ export default function ProfilePage() {
                 <input
                   id="groupName"
                   type="text"
+                  maxLength={32}
                   value={groupName}
                   onChange={(e) => setGroupName(e.target.value)}
                   placeholder="БПИ-241"
