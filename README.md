@@ -48,69 +48,16 @@
 
 ---
 
-## Архитектура
+## Architecture in 6 bullets
 
-```mermaid
-graph TB
-    subgraph Channels["Каналы ввода"]
-        WEB["🌐 Веб-приложение\nNext.js 15"]
-        TG["✈️ Telegram-бот"]
-    end
+1. Два канала входа: веб-приложение и Telegram-бот.
+2. Все пользовательские запросы проходят через API-слой (`/api/orchestrate`, `/api/upload`, `/api/rag/query`, webhook Telegram).
+3. Оркестратор параллельно запускает LLM-классификацию и keyword-fallback, затем выбирает intent и confidence.
+4. Исполнитель вызывает один из 9 воркфлоу из реестра (`rag_qa`, `letter_generator`, `task_extractor`, и др.).
+5. `rag_qa` и ingestion используют общий RAG-пайплайн: chunk → embeddings → pgvector retrieve → citations.
+6. Инфраструктура: Supabase (PostgreSQL + pgvector), OpenAI (GPT-4o-mini/Whisper), Upstash Redis (кэш и rate limit).
 
-    subgraph API["API-слой (Route Handlers)"]
-        ORCH["POST /api/orchestrate"]
-        UPLOAD["POST /api/upload"]
-        RAG_API["POST /api/rag/query"]
-        TG_WH["POST /api/telegram/webhook"]
-    end
-
-    subgraph Orchestrator["Движок оркестратора"]
-        ROUTER["Router"]
-        CLASSIFY["Классификатор намерений\n━━━━━━━━━━━━\nLLM (GPT-4o) ‖ Ключевые слова\nпараллельно, таймаут 8 с"]
-        EXECUTOR["Исполнитель воркфлоу"]
-        REGISTRY["Реестр · 9 воркфлоу"]
-    end
-
-    subgraph Services["Сервисы воркфлоу"]
-        S1["rag_qa"]
-        S2["letter_generator"]
-        S3["task_extractor"]
-        S4["lecture_insight"]
-        S5["study_plan · quiz\ncheatsheet · explain"]
-    end
-
-    subgraph RAG["RAG-пайплайн"]
-        CHUNK["Чанкер\n800 токенов, overlap 2 предложения"]
-        EMBED["Эмбеддер\ntext-embedding-3-small\n1536 измерений"]
-        RETRIEVE["pgvector поиск\ncosine similarity ≥ 0.5"]
-        EXPAND["Расширение запроса\n3 варианта от LLM"]
-    end
-
-    subgraph Infra["Инфраструктура"]
-        DB[("Supabase\nPostgreSQL + pgvector")]
-        AI["OpenAI\nGPT-4o-mini · Whisper"]
-        CACHE[("Upstash Redis\nКэш RAG 1 ч · rate limit")]
-    end
-
-    WEB --> ORCH & UPLOAD & RAG_API
-    TG --> TG_WH
-    ORCH --> ROUTER
-    ROUTER --> CLASSIFY --> EXECUTOR --> REGISTRY
-    REGISTRY --> S1 & S2 & S3 & S4 & S5
-    S1 --> RAG
-    UPLOAD --> RAG
-    RAG --> DB & AI
-    Services --> AI
-    API --> CACHE & DB
-```
-
-**Политика confidence** — классификатор возвращает оценку уверенности от 0.0 до 1.0:
-
-| Оценка | Действие |
-|---|---|
-| ≥ 0.75 | Выполнить воркфлоу напрямую |
-| 0.45 – 0.74 | Показать WorkflowPicker, уточнить намерение |
-| < 0.45 | Общий fallback со списком всех воркфлоу |
+**Подробно: [docs/architecture.md](docs/architecture.md)**.
 
 ---
 
