@@ -23,11 +23,17 @@ const examples = [
   "Собери план подготовки к экзамену за 10 дней."
 ];
 
-const recentPrompts = [
-  { text: "Подготовь ответ в учебный офис по академической справке", status: "Готово" },
-  { text: "Сделай список задач из загруженного syllabus", status: "В обработке" },
-  { text: "Сократи письмо для куратора до делового формата", status: "Готово" }
+const backupPrompts = [
+  "Если сеть нестабильна: кратко перечисли 3 шага решения задачи и 1 пример.",
+  "Если API OpenAI временно недоступен: верни skeleton-ответ с разделами «Черновик», «Что уточнить», «Следующий шаг»."
 ];
+
+type HistoryPrompt = {
+  text: string;
+  status: "Готово" | "Ошибка" | "Уточнение" | "Маршрут";
+  workflow?: string | null;
+  createdAt?: string;
+};
 
 type ResultView = {
   /** Главный текст ответа — то, что пользователь хочет видеть и копировать */
@@ -197,6 +203,8 @@ export default function AssistantClient() {
   const [streamedText, setStreamedText] = useState<string>("");
   const [streamCitations, setStreamCitations] = useState<CitationSource[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [recentPrompts, setRecentPrompts] = useState<HistoryPrompt[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -209,6 +217,36 @@ export default function AssistantClient() {
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    const loadRecentHistory = async () => {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        const response = await fetch("/api/analytics/history?limit=6", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        if (!response.ok) return;
+
+        const payload = (await response.json()) as {
+          ok?: boolean;
+          items?: {
+            text: string;
+            status: "Готово" | "Ошибка" | "Уточнение" | "Маршрут";
+            workflow?: string | null;
+            createdAt?: string;
+          }[];
+        };
+        if (payload.ok && Array.isArray(payload.items)) setRecentPrompts(payload.items);
+      } catch {
+        // Optional UI block: ignore failures silently.
+      } finally {
+        setHistoryLoading(false);
+      }
+    };
+    void loadRecentHistory();
   }, []);
 
   const toggleRecording = async () => {
@@ -639,26 +677,55 @@ export default function AssistantClient() {
 
       <div className="animate-slide-in-right delay-150">
         <SectionCard title="Недавние запросы" subtitle="История запросов текущей сессии.">
-          <div className="space-y-3">
-            {recentPrompts.map((item, i) => (
-              <div
-                key={item.text}
-                className="animate-fade-in cursor-pointer rounded-xl border border-[var(--hse-border)] p-3 transition-all duration-200 hover:border-[var(--hse-blue)]/20 hover:bg-[var(--hse-light)]/20 hover:-translate-y-px"
-                style={{ animationDelay: `${i * 80}ms` }}
-                onClick={() => setQuery(item.text)}
-              >
-                <p className="text-sm text-slate-800">{item.text}</p>
-                <div className="mt-2">
-                  <StatusBadge label={item.status} tone={item.status === "Готово" ? "success" : "warning"} />
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4">
+          {historyLoading ? (
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <Spinner />
+              Загружаем историю…
+            </div>
+          ) : recentPrompts.length === 0 ? (
             <EmptyState
-              title="История ограничена"
-              description="После подключения backend здесь появится полный журнал запросов и результатов."
+              title="История пока пуста"
+              description="После первых запросов здесь появятся последние сценарии и статусы."
             />
+          ) : (
+            <div className="space-y-3">
+              {recentPrompts.map((item, i) => (
+                <div
+                  key={`${item.text}-${item.createdAt ?? i}`}
+                  className="animate-fade-in cursor-pointer rounded-xl border border-[var(--hse-border)] p-3 transition-all duration-200 hover:border-[var(--hse-blue)]/20 hover:bg-[var(--hse-light)]/20 hover:-translate-y-px"
+                  style={{ animationDelay: `${i * 80}ms` }}
+                  onClick={() => setQuery(item.text)}
+                >
+                  <p className="text-sm text-slate-800">{item.text}</p>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <StatusBadge
+                      label={item.status}
+                      tone={item.status === "Готово" ? "success" : item.status === "Ошибка" ? "danger" : "warning"}
+                    />
+                    {item.workflow ? <span className="text-[11px] text-slate-400">{item.workflow}</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-5 rounded-xl border border-dashed border-[var(--hse-border)] bg-[var(--hse-page-bg)] p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--hse-text-muted)]">
+              Резервные prompt&apos;ы
+            </p>
+            <ul className="mt-2 space-y-2">
+              {backupPrompts.map((prompt) => (
+                <li key={prompt}>
+                  <button
+                    type="button"
+                    onClick={() => setQuery(prompt)}
+                    className="w-full rounded-lg border border-[var(--hse-border)] bg-white px-2 py-1.5 text-left text-xs text-slate-700 transition hover:border-[var(--hse-blue)]/30 hover:bg-[var(--hse-light)]/30"
+                  >
+                    {prompt}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         </SectionCard>
       </div>
