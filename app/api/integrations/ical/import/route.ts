@@ -133,7 +133,7 @@ export async function POST(request: Request) {
       title,
       description: description || null,
       due_date: event.start.toISOString(),
-      status: "todo",
+      status: "pending",
       source_run_id: null
     });
 

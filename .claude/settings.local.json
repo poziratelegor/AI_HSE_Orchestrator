@@ -43,7 +43,23 @@
       "Bash(npx eslint:*)",
       "Bash(npx vercel:*)",
       "mcp__338da1a6-b507-4c42-9abd-95d9676b9c4e__get_project",
-      "mcp__338da1a6-b507-4c42-9abd-95d9676b9c4e__get_publishable_keys"
+      "mcp__338da1a6-b507-4c42-9abd-95d9676b9c4e__get_publishable_keys",
+      "Bash(python3 -c \"import secrets; print\\(secrets.token_hex\\(32\\)\\)\")",
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
+      "Bash(find \"C:/Users/комп/Desktop/AI_HSE_Orchestrator-main/components\" -name \".gitkeep\" -delete)",
+      "Bash(xargs ls:*)",
+      "Bash(wc -l /c/Users/комп/Desktop/AI_HSE_Orchestrator-main/lib/**/*.ts /c/Users/комп/Desktop/AI_HSE_Orchestrator-main/app/api/**/*.ts)",
+      "Bash(npx vitest:*)",
+      "Bash(npm list *)",
+      "Bash(node -e \"const p = require\\('./package.json'\\); const targets = ['react-markdown','remark-gfm','@dnd-kit/core','@dnd-kit/sortable']; for \\(const t of targets\\) console.log\\(t, '->', p.dependencies?.[t] ?? 'MISSING'\\)\")",
+      "Bash(npm test *)",
+      "Bash(docker --version)",
+      "Bash(git config *)",
+      "Bash(xargs wc *)",
+      "mcp__338da1a6-b507-4c42-9abd-95d9676b9c4e__list_projects",
+      "mcp__338da1a6-b507-4c42-9abd-95d9676b9c4e__apply_migration",
+      "mcp__338da1a6-b507-4c42-9abd-95d9676b9c4e__get_logs",
+      "mcp__338da1a6-b507-4c42-9abd-95d9676b9c4e__list_tables"
     ]
   }
 }

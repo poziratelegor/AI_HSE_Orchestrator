@@ -1,0 +1,57 @@
+services:
+  # ─── Главное приложение: фронт + API + Telegram webhook ──────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: studyflow-web
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.local
+    environment:
+      # Внутри контейнера всегда слушаем 0.0.0.0:3000
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - NODE_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ─── Cloudflare Quick Tunnel (демо: рандомный URL) ───────────────────────────
+  # Запускать командой:
+  #   docker compose --profile bot up -d
+  # После первого старта посмотри URL в логах:
+  #   docker compose logs cloudflared | grep trycloudflare.com
+  # Минус: URL меняется при каждом перезапуске → webhook надо переустанавливать.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: studyflow-tunnel
+    profiles: ["bot"]
+    command: tunnel --no-autoupdate --url http://web:3000
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Cloudflare Named Tunnel (production: стабильный URL) ────────────────────
+  # Использует tunnel token из .env.local (CLOUDFLARE_TUNNEL_TOKEN).
+  # Сам туннель и Public Hostname (например bot.твой-домен.ru → http://web:3000)
+  # настраиваются в Cloudflare Zero Trust → Networks → Tunnels.
+  # Запускать командой:
+  #   docker compose --profile bot-named up -d
+  cloudflared-named:
+    image: cloudflare/cloudflared:latest
+    container_name: studyflow-tunnel-named
+    profiles: ["bot-named"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    env_file:
+      - .env.local
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped

@@ -1,13 +1,8 @@
-import { getOpenAIClient } from "@/lib/ai/client";
+import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
+import { withRetry } from "@/lib/ai/retry";
+import { buildExplainPrompt } from "@/lib/ai/prompts";
+import { loadStudentContext } from "@/lib/ai/student-context";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
-
-const SYSTEM_PROMPT = `
-Объясни следующий текст простыми словами для студента.
-Избегай сложных терминов. Если термин необходим — объясни его.
-Возвращай ТОЛЬКО JSON:
-{"explanation":"...","key_terms":[{"term":"...","simple":"..."}],
- "analogy":"понятная аналогия если уместна"}
-`.trim();
 
 type ExplainResult =
   | {
@@ -24,24 +19,30 @@ type ExplainResult =
 
 export async function runExplainThis(
   text: string,
-  _ctx?: WorkflowContext
+  ctx?: WorkflowContext
 ): Promise<ExplainResult> {
   const openai = getOpenAIClient();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
+  // Load student context for course-level adaptation (cached)
+  const studentCtx = ctx?.userId ? await loadStudentContext(ctx.userId) : null;
+  const systemPrompt = buildExplainPrompt(studentCtx);
+
   try {
-    const completion = await openai.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL ?? "gpt-4o",
-        temperature: 0.5,
-        max_tokens: 1500,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: text }
-        ]
-      },
-      { signal: controller.signal }
+    const completion = await withRetry(() =>
+      openai.chat.completions.create(
+        {
+          model: DEFAULT_MODEL,
+          temperature: 0.5,
+          max_tokens: 1500,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: text }
+          ]
+        },
+        { signal: controller.signal }
+      )
     );
 
     clearTimeout(timeout);
@@ -70,11 +71,12 @@ export async function runExplainThis(
         data: { explanation, key_terms, analogy }
       };
     } catch {
+      // Graceful degradation: return raw LLM text as the explanation
       return {
-        ok: false,
+        ok: true,
         workflow: "explain_this",
-        error: "parse_error",
-        message: "Не удалось разобрать ответ модели как JSON."
+        summary: raw.slice(0, 80) + (raw.length > 80 ? "…" : ""),
+        data: { explanation: raw, key_terms: [], analogy: "" }
       };
     }
   } catch (err: unknown) {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { runQuizGenerator } from "@/lib/services/content/quiz";
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -29,12 +30,15 @@ export async function POST(request: Request) {
   }
 
   // 3. Вызов сервиса
-  // TODO: вызвать runQuizGenerator() из lib/services/quiz.ts
-  return NextResponse.json({
-    ok: true,
-    workflow: "quiz_generator",
-    questions: [],
-    message: "Quiz generator не реализован."
-  });
+  try {
+    const inputText = questionCount
+      ? `${text}\n\nКоличество вопросов: ${questionCount}`
+      : (text as string);
+    const result = await runQuizGenerator(inputText);
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error("[api/quiz/generate] service error:", err);
+    return ERRORS.INTERNAL("Не удалось сгенерировать тест.");
+  }
 }
 

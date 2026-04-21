@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { runTaskExtractor } from "@/lib/services/planning/tasks";
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -22,12 +23,12 @@ export async function POST(request: Request) {
   }
 
   // 3. Вызов сервиса
-  // TODO: вызвать runTaskExtractor() из lib/services/tasks.ts
-  return NextResponse.json({
-    ok: true,
-    workflow: "task_extractor",
-    tasks: [],
-    message: "Task extractor не реализован."
-  });
+  try {
+    const result = await runTaskExtractor(text as string, { userId: user.id });
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error("[api/tasks/extract] service error:", err);
+    return ERRORS.INTERNAL("Не удалось извлечь задачи.");
+  }
 }
 

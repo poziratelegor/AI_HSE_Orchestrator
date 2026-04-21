@@ -1,14 +1,8 @@
-import { getOpenAIClient } from "@/lib/ai/client";
+import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
+import { withRetry } from "@/lib/ai/retry";
+import { buildCheatSheetPrompt } from "@/lib/ai/prompts";
+import { loadStudentContext } from "@/lib/ai/student-context";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
-
-const SYSTEM_PROMPT = `
-Создай краткую шпаргалку по теме. Структура ТОЛЬКО JSON:
-{"title":"название темы",
- "definitions":[{"term":"...","definition":"..."}],
- "formulas":["формула или правило"],
- "examples":["краткий пример"],
- "tips":["совет для запоминания"]}
-`.trim();
 
 type CheatSheetResult =
   | {
@@ -27,24 +21,30 @@ type CheatSheetResult =
 
 export async function runCheatSheet(
   text: string,
-  _ctx?: WorkflowContext
+  ctx?: WorkflowContext
 ): Promise<CheatSheetResult> {
   const openai = getOpenAIClient();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
+  // Load student context for personalized greeting (cached)
+  const studentCtx = ctx?.userId ? await loadStudentContext(ctx.userId) : null;
+  const systemPrompt = buildCheatSheetPrompt(studentCtx);
+
   try {
-    const completion = await openai.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL ?? "gpt-4o",
-        temperature: 0.2,
-        max_tokens: 1500,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Создай шпаргалку по следующей теме или тексту:\n\n${text}` }
-        ]
-      },
-      { signal: controller.signal }
+    const completion = await withRetry(() =>
+      openai.chat.completions.create(
+        {
+          model: DEFAULT_MODEL,
+          temperature: 0.2,
+          max_tokens: 1800,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `Создай шпаргалку по следующей теме или тексту:\n\n${text}` }
+          ]
+        },
+        { signal: controller.signal }
+      )
     );
 
     clearTimeout(timeout);
@@ -77,11 +77,12 @@ export async function runCheatSheet(
         data: { title, definitions, formulas, examples, tips }
       };
     } catch {
+      // Graceful degradation: return raw LLM text
       return {
-        ok: false,
+        ok: true,
         workflow: "cheat_sheet",
-        error: "parse_error",
-        message: "Не удалось разобрать ответ модели как JSON."
+        summary: "Шпаргалка",
+        data: { title: "Шпаргалка", definitions: [], formulas: [], examples: [raw], tips: [] }
       };
     }
   } catch (err: unknown) {

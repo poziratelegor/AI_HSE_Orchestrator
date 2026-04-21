@@ -259,6 +259,25 @@ function normalizeDate(v: unknown): { value: string | null; error?: string } {
   return { value: d.toISOString() };
 }
 
+function downloadTemplate() {
+  const lines = [
+    "Название,Описание,Дедлайн,Приоритет",
+    "Сдать ДЗ по матану,Главы 4-5 учебника,2026-05-15 18:00,high",
+    "Подготовить презентацию,Тема: алгоритмы сортировки,2026-05-20,medium",
+    "Записаться на консультацию,,,low"
+  ];
+  // BOM чтобы Excel правильно открыл UTF-8
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "tasks-template.csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function ImportTasksDialog({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -388,27 +407,43 @@ function ImportTasksDialog({ onClose }: { onClose: () => void }) {
       {!rows && (
         <>
           <div className="rounded-xl border border-dashed border-[var(--hse-border)] bg-[var(--hse-page-bg)]/40 p-5 text-sm text-slate-600">
-            <p className="mb-2 font-medium text-slate-800">Формат файла</p>
+            <p className="mb-2 font-medium text-slate-800">Как подготовить таблицу</p>
             <p>
-              Первая строка — заголовки. Поддерживаемые столбцы (RU/EN, регистр не важен):
+              Первая строка — это заголовки столбцов. Названия можно писать на русском или английском
+              (регистр не важен). Каждая следующая строка — одна задача. Пустые строки игнорируются.
             </p>
-            <ul className="mt-2 list-inside list-disc space-y-0.5 text-xs">
+            <p className="mt-3 font-medium text-slate-800">Поддерживаемые столбцы</p>
+            <ul className="mt-1 list-inside list-disc space-y-0.5 text-xs">
               <li>
-                <b>Название</b> / <b>Title</b> — обязательно
+                <b>Название</b> / <b>Title</b> / <b>Задача</b> — <span className="text-red-600">обязательно</span>
               </li>
               <li>
-                <b>Описание</b> / <b>Description</b> — опционально
+                <b>Описание</b> / <b>Description</b> / <b>Детали</b> — опционально
               </li>
               <li>
-                <b>Дедлайн</b> / <b>Due</b> / <b>Deadline</b> — опционально (дата или ISO)
+                <b>Дедлайн</b> / <b>Due</b> / <b>Deadline</b> / <b>Срок</b> — опционально.
+                Любой формат: <code>2026-05-15</code>, <code>15.05.2026 18:00</code>, ячейка-дата Excel.
               </li>
               <li>
-                <b>Приоритет</b> / <b>Priority</b> — low/medium/high/urgent (опционально)
+                <b>Приоритет</b> / <b>Priority</b> — низкий / средний / высокий / срочно
+                (или <code>low</code> / <code>medium</code> / <code>high</code> / <code>urgent</code>).
+                По умолчанию — средний.
               </li>
             </ul>
-            <p className="mt-2 text-xs text-slate-500">
-              Поддерживаются: .xlsx, .xls, .csv. Берём только первый лист.
+            <p className="mt-3 text-xs text-slate-500">
+              Поддерживаются форматы: <b>.xlsx</b>, <b>.xls</b>, <b>.csv</b>. Берём только первый лист.
+              Перед загрузкой ты увидишь превью — задачи создадутся только после нажатия
+              «Импортировать».
             </p>
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={downloadTemplate}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--hse-border)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--hse-blue)] transition hover:bg-[var(--hse-light)]"
+              >
+                ⬇️ Скачать шаблон CSV
+              </button>
+            </div>
           </div>
 
           <div className="mt-4 flex flex-col items-center gap-3">

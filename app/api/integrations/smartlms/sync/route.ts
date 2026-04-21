@@ -99,7 +99,7 @@ export async function POST(request: Request) {
       title,
       description: stripHtml(assignment.intro ?? ""),
       due_date: dueDate.toISOString(),
-      status: "todo",
+      status: "pending",
       source_run_id: null
     });
 

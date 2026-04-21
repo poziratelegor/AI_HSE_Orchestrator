@@ -1,18 +1,8 @@
-import { getOpenAIClient } from "@/lib/ai/client";
+import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
+import { withRetry } from "@/lib/ai/retry";
+import { buildTaskExtractorPrompt } from "@/lib/ai/prompts";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-
-function buildSystemPrompt(today: string): string {
-  return `
-Извлеки все задачи и дедлайны из текста. Возвращай ТОЛЬКО JSON:
-{"tasks":[
-  {"title":"...","description":"...","due_date":"ISO8601 или null",
-   "priority":"low|medium|high|urgent"}
-]}
-Если дедлайн относительный ("через неделю") — вычисли от сегодня.
-Сегодня: ${today}
-`.trim();
-}
 
 type TaskItem = {
   title: string;
@@ -60,17 +50,19 @@ export async function runTaskExtractor(
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const completion = await openai.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL ?? "gpt-4o",
-        temperature: 0.1,
-        max_tokens: 1500,
-        messages: [
-          { role: "system", content: buildSystemPrompt(today) },
-          { role: "user", content: text }
-        ]
-      },
-      { signal: controller.signal }
+    const completion = await withRetry(() =>
+      openai.chat.completions.create(
+        {
+          model: DEFAULT_MODEL,
+          temperature: 0.1,
+          max_tokens: 1500,
+          messages: [
+            { role: "system", content: buildTaskExtractorPrompt(today) },
+            { role: "user", content: text }
+          ]
+        },
+        { signal: controller.signal }
+      )
     );
 
     clearTimeout(timeout);
@@ -94,11 +86,15 @@ export async function runTaskExtractor(
         data: { tasks, saved }
       };
     } catch {
+      // Graceful degradation: return raw LLM text as a single task
       return {
-        ok: false,
+        ok: true,
         workflow: "task_extractor",
-        error: "parse_error",
-        message: "Не удалось разобрать ответ модели как JSON."
+        summary: "Извлечённые задачи (свободная форма)",
+        data: {
+          tasks: [{ title: raw.slice(0, 200), description: raw, due_date: null, priority: "medium" as const }],
+          saved: 0
+        }
       };
     }
   } catch (err: unknown) {

@@ -3,6 +3,10 @@
 import { useState, useRef } from "react";
 import { SectionCard, StatusBadge, EmptyState, InlineAlert, Spinner } from "@/components/dashboard/ui";
 import { HowItWorks } from "@/components/dashboard/HowItWorks";
+import { WorkflowPicker } from "@/components/dashboard/WorkflowPicker";
+import { Markdown } from "@/components/dashboard/Markdown";
+import { ResultBlock } from "@/components/dashboard/ResultBlock";
+import type { CitationSource } from "@/components/dashboard/Citation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 
@@ -25,19 +29,94 @@ const recentPrompts = [
   { text: "Сократи письмо для куратора до делового формата", status: "Готово" }
 ];
 
-function renderResult(result: unknown): string {
-  if (result === null || result === undefined) return "";
-  if (typeof result === "string") return result;
-  const obj = result as Record<string, unknown>;
-  if (obj.data && typeof obj.data === "object") {
-    const data = obj.data as Record<string, unknown>;
-    if (typeof data.body === "string") return data.body;
-    if (typeof data.summary === "string") return data.summary;
-    if (typeof data.explanation === "string") return data.explanation;
-    if (typeof data.answer === "string") return data.answer;
+type ResultView = {
+  /** Главный текст ответа — то, что пользователь хочет видеть и копировать */
+  text: string;
+  /** Опциональный заголовок ("Письмо", "Конспект", ...) */
+  title?: string;
+  /** Опциональный subtitle (тема письма, summary) */
+  subtitle?: string;
+};
+
+function pickFromData(data: Record<string, unknown>): string | null {
+  // Письмо: subject + body
+  if (typeof data.body === "string" && data.body.trim()) return data.body;
+  if (typeof data.summary === "string" && data.summary.trim()) return data.summary;
+  if (typeof data.explanation === "string" && data.explanation.trim()) return data.explanation;
+  if (typeof data.answer === "string" && data.answer.trim()) return data.answer;
+  if (typeof data.text === "string" && data.text.trim()) return data.text;
+  if (typeof data.content === "string" && data.content.trim()) return data.content;
+  if (typeof data.markdown === "string" && data.markdown.trim()) return data.markdown;
+
+  // План / задачи / список — массивы
+  if (Array.isArray(data.tasks) && data.tasks.length > 0) {
+    return data.tasks
+      .map((t, i) => {
+        if (typeof t === "string") return `${i + 1}. ${t}`;
+        const r = t as Record<string, unknown>;
+        const title = (r.title ?? r.name ?? "Задача") as string;
+        const due = r.due_date || r.dueDate;
+        const prio = r.priority;
+        const extras = [due ? `до ${due}` : null, prio ? `приоритет: ${prio}` : null].filter(Boolean).join(", ");
+        return `${i + 1}. ${title}${extras ? ` (${extras})` : ""}`;
+      })
+      .join("\n");
   }
-  if (typeof obj.message === "string" && obj.ok === false) return obj.message;
-  return JSON.stringify(result, null, 2);
+  if (Array.isArray(data.items) && data.items.length > 0) {
+    return data.items.map((x, i) => `${i + 1}. ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n");
+  }
+  if (Array.isArray(data.points) && data.points.length > 0) {
+    return data.points.map((x, i) => `${i + 1}. ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n");
+  }
+  return null;
+}
+
+function renderResult(result: unknown): ResultView {
+  if (result === null || result === undefined) return { text: "" };
+  if (typeof result === "string") return { text: result };
+
+  const obj = result as Record<string, unknown>;
+
+  // Ошибочный ответ
+  if (obj.ok === false && typeof obj.message === "string") {
+    return { text: obj.message, title: "Ошибка" };
+  }
+
+  // Орхестратор оборачивает: { ok, intent, result: {...} }
+  // Внутри result.data лежат поля workflow.
+  const inner =
+    obj.result && typeof obj.result === "object"
+      ? (obj.result as Record<string, unknown>)
+      : obj;
+
+  const data =
+    inner.data && typeof inner.data === "object"
+      ? (inner.data as Record<string, unknown>)
+      : inner;
+
+  const workflow = (inner.workflow ?? obj.intent) as string | undefined;
+  const summary = typeof inner.summary === "string" ? inner.summary : undefined;
+  const subject = typeof data.subject === "string" ? data.subject : undefined;
+
+  const title = (() => {
+    switch (workflow) {
+      case "letter_generator": return "Письмо";
+      case "task_extractor":   return "Задачи";
+      case "study_plan":       return "Учебный план";
+      case "explain_this":     return "Объяснение";
+      case "cheat_sheet":      return "Шпаргалка";
+      case "quiz_generator":   return "Тест";
+      case "lecture_insight":  return "Конспект лекции";
+      case "rag_qa":           return "Ответ по документам";
+      default:                 return "Результат";
+    }
+  })();
+
+  const text = pickFromData(data);
+  if (text) return { text, title, subtitle: subject ?? summary };
+
+  // Fallback — что-то нестандартное; покажем JSON, но хотя бы не сломаемся.
+  return { text: JSON.stringify(inner, null, 2), title };
 }
 
 /** Three-dot typing animation indicator */
@@ -66,6 +145,11 @@ export default function AssistantClient() {
   const [error, setError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [showWorkflowPicker, setShowWorkflowPicker] = useState(false);
+  const [clarificationQuestion, setClarificationQuestion] = useState<string | null>(null);
+  const [streamedText, setStreamedText] = useState<string>("");
+  const [streamCitations, setStreamCitations] = useState<CitationSource[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -135,12 +219,16 @@ export default function AssistantClient() {
     setIsRecording(true);
   };
 
-  const handleSubmit = async () => {
-    if (!query.trim()) return;
+  const handleSubmit = async (overrideQuery?: string) => {
+    const text = (overrideQuery ?? query).trim();
+    if (!text) return;
 
     setIsLoading(true);
     setError(null);
     setResult(null);
+    setStreamedText("");
+    setStreamCitations([]);
+    setShowWorkflowPicker(false);
 
     try {
       const supabase = getSupabaseBrowserClient();
@@ -153,7 +241,7 @@ export default function AssistantClient() {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({ text: query.trim(), channel: "web" })
+        body: JSON.stringify({ text, channel: "web" })
       });
 
       const payload = (await response.json()) as unknown;
@@ -168,8 +256,31 @@ export default function AssistantClient() {
         return;
       }
 
-      setResult(payload);
-      toast.success("Запрос обработан успешно");
+      const data = payload as {
+        ok?: boolean;
+        intent?: string;
+        needsClarification?: boolean;
+        clarificationQuestion?: string;
+        result?: unknown;
+      };
+
+      if (data.needsClarification || data.intent === "route_recommender") {
+        setClarificationQuestion(data.clarificationQuestion ?? null);
+        setShowWorkflowPicker(true);
+        setResult(null);
+        return;
+      }
+
+      setShowWorkflowPicker(false);
+
+      // RAG ответ — переключаемся на streaming
+      if (data.intent === "rag_qa") {
+        setResult(null);
+        void streamRagAnswer(text);
+      } else {
+        setResult(payload);
+        toast.success("Запрос обработан успешно");
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Сетевая ошибка.";
       setError(msg);
@@ -177,6 +288,86 @@ export default function AssistantClient() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const streamRagAnswer = async (question: string) => {
+    setIsStreaming(true);
+    setStreamedText("");
+    setStreamCitations([]);
+    setError(null);
+
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      const response = await fetch("/api/rag/query/stream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ query: question })
+      });
+
+      if (!response.ok || !response.body) {
+        const text = await response.text();
+        setError(`Stream error: ${text || response.status}`);
+        toast.error("Не удалось получить ответ от RAG");
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? ""; // keep incomplete line for next iteration
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed) as
+              | { delta: string }
+              | { done: true; citations: CitationSource[] }
+              | { error: string };
+
+            if ("delta" in event) {
+              setStreamedText((prev) => prev + event.delta);
+            } else if ("done" in event) {
+              setStreamCitations(event.citations);
+            } else if ("error" in event) {
+              setError(event.error);
+              toast.error(event.error);
+            }
+          } catch {
+            // Malformed line — skip
+          }
+        }
+      }
+
+      toast.success("Ответ готов");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Сетевая ошибка";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
+  const handleWorkflowSelect = (workflowId: string, originalQuery: string) => {
+    const prefixedQuery = `[${workflowId}] ${originalQuery}`;
+    setShowWorkflowPicker(false);
+    setQuery(prefixedQuery);
+    void handleSubmit(prefixedQuery);
   };
 
   return (
@@ -193,7 +384,7 @@ export default function AssistantClient() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && query.trim() && !isLoading) {
                     e.preventDefault();
-                    void handleSubmit();
+                    void handleSubmit(undefined);
                   }
                 }}
               />
@@ -237,7 +428,7 @@ export default function AssistantClient() {
                   {/* Отправить */}
                   <button
                     disabled={isLoading || !query.trim()}
-                    onClick={() => void handleSubmit()}
+                    onClick={() => void handleSubmit(undefined)}
                     className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--hse-blue)] px-4 py-2 text-sm font-medium text-white transition-all duration-150 hover:bg-[var(--hse-blue-mid)] hover:-translate-y-px active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(55,75,155,0.3)] focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {isLoading ? (
@@ -282,22 +473,73 @@ export default function AssistantClient() {
               </div>
             )}
 
-            {/* Result */}
-            {result !== null && !error && !isLoading && (
-              <div className="mt-4 animate-fade-in-scale rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
-                <div className="mb-3 flex items-center gap-2">
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100" aria-hidden="true">
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                      <path d="m3 6 2 2 4-4" stroke="#059669" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </span>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Результат</p>
-                </div>
-                <pre className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
-                  {renderResult(result)}
-                </pre>
+            {/* Workflow picker — shown when AI is unsure or returns route_recommender */}
+            {showWorkflowPicker && !isLoading && (
+              <div className="mt-4 animate-fade-in">
+                <WorkflowPicker
+                  question={clarificationQuestion ?? "Уточни, что тебе нужно:"}
+                  originalQuery={query}
+                  onSelect={handleWorkflowSelect}
+                />
               </div>
             )}
+
+            {/* Streaming RAG answer */}
+            {(isStreaming || streamedText) && !error && (
+              <div className="mt-4 animate-fade-in-scale rounded-2xl border border-[var(--hse-blue)]/20 bg-white p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--hse-light)]" aria-hidden="true">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <circle cx="6" cy="6" r="5" stroke="var(--hse-blue)" strokeWidth="1.4" />
+                      <path d="M4 6h4M6 4v4" stroke="var(--hse-blue)" strokeWidth="1.4" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[var(--hse-blue)]">Ответ по документам</p>
+                  {isStreaming && (
+                    <span className="inline-flex gap-0.5" aria-label="Стрим">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                    </span>
+                  )}
+                </div>
+                <Markdown content={streamedText} sources={streamCitations} />
+                {!isStreaming && streamCitations.length > 0 && (
+                  <div className="mt-4 border-t border-[var(--hse-border)] pt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--hse-text-muted)]">Источники</p>
+                    <ol className="space-y-1.5 text-xs text-slate-600">
+                      {streamCitations.map((c) => (
+                        <li key={c.index}>
+                          <span className="font-medium text-[var(--hse-blue)]">[{c.index}]</span>{" "}
+                          {c.documentTitle && <span className="font-medium">{c.documentTitle}</span>}
+                          {c.documentTitle && " — "}
+                          <span className="text-[var(--hse-text-muted)]">{c.excerpt}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Result */}
+            {result !== null && !error && !isLoading && (() => {
+              const view = renderResult(result);
+              if (!view.text) return null;
+              return (
+                <div className="mt-4">
+                  <ResultBlock
+                    title={view.title ?? "Результат"}
+                    text={view.text}
+                    meta={
+                      view.subtitle ? (
+                        <p className="text-sm font-medium text-slate-700">{view.subtitle}</p>
+                      ) : undefined
+                    }
+                  />
+                </div>
+              );
+            })()}
           </SectionCard>
         </div>
 

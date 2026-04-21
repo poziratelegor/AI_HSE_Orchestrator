@@ -1,5 +1,5 @@
-import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { cacheGet, cacheSet } from "@/lib/cache/redis";
 
 export interface RateLimitConfig {
   /** Max requests allowed in the window */
@@ -18,7 +18,12 @@ const DEFAULTS: RateLimitConfig = {
 
 /**
  * Checks whether `userId` has exceeded the rate limit for `action`.
- * Uses `analytics_events` table — counts events within the rolling window.
+ *
+ * Uses Redis (Upstash) as the backing store with a sliding counter per window.
+ * Key format: `rl:{userId}:{action}:{windowBucket}`
+ * TTL = windowSeconds (counter auto-expires with the window).
+ *
+ * Graceful degradation: if Redis is unavailable the request is allowed (fail open).
  *
  * Returns `{ allowed: true }` when within limits.
  * Returns `{ allowed: false, response }` with a 429 NextResponse when exceeded.
@@ -30,23 +35,23 @@ export async function checkRateLimit(
   const { limit, windowSeconds, action } = { ...DEFAULTS, ...config };
 
   try {
-    const supabase = getSupabaseServerClient();
-    const windowStart = new Date(Date.now() - windowSeconds * 1000).toISOString();
+    // Fixed window bucket: floor(now / windowMs)
+    const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
+    const key = `rl:${userId}:${action}:${bucket}`;
 
-    const { count, error } = await supabase
-      .from("analytics_events")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .eq("event_name", `rate_limit_check:${action}`)
-      .gte("created_at", windowStart);
+    // Read current count
+    const raw = await cacheGet(key);
 
-    if (error) {
-      // If we can't check the rate limit, allow the request (fail open)
-      console.warn("[rate-limit] check failed, allowing request:", error.message);
+    // Redis unavailable → fail open
+    if (raw === null && process.env.UPSTASH_REDIS_REST_URL) {
+      // Could not reach Redis at all — allow request
+      console.warn("[rate-limit] Redis unavailable, allowing request");
       return { allowed: true };
     }
 
-    if ((count ?? 0) >= limit) {
+    const current = raw !== null ? parseInt(raw, 10) : 0;
+
+    if (current >= limit) {
       return {
         allowed: false,
         response: NextResponse.json(
@@ -68,13 +73,12 @@ export async function checkRateLimit(
       };
     }
 
-    // Record this request
-    void supabase.from("analytics_events").insert({
-      id: crypto.randomUUID(),
-      user_id: userId,
-      event_name: `rate_limit_check:${action}`,
-      created_at: new Date().toISOString()
-    });
+    // Increment counter. TTL is set on first write (current === 0); subsequent
+    // writes refresh are skipped to avoid extending the window unintentionally.
+    // We always write to keep the count accurate.
+    const newCount = current + 1;
+    // Always write with TTL so the key expires at the end of the window
+    await cacheSet(key, String(newCount), windowSeconds);
 
     return { allowed: true };
   } catch (err) {

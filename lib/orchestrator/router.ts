@@ -46,6 +46,12 @@ export async function orchestrate(input: OrchestratorInput) {
     return buildFallbackResponse();
   }
 
+  // Recommend zone: confidence between recommend (0.45) and execute (0.75)
+  // Still execute but include recommendation context so the client can show a hint
+  const isRecommendZone =
+    classification.confidence >= ORCHESTRATOR_THRESHOLDS.recommend &&
+    classification.confidence < ORCHESTRATOR_THRESHOLDS.execute;
+
   try {
     const result = await executeWorkflow(classification.intent, input.text, {
       userId: input.userId
@@ -60,6 +66,10 @@ export async function orchestrate(input: OrchestratorInput) {
       intent: classification.intent,
       confidence: classification.confidence,
       reason: classification.reason,
+      ...(isRecommendZone && {
+        lowConfidence: true,
+        suggestion: `Выбран сценарий «${classification.intent}» с уверенностью ${Math.round(classification.confidence * 100)}%. Если результат неточный — уточните запрос.`
+      }),
       result
     };
   } catch (err) {

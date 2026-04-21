@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { runStudyPlan } from "@/lib/services/planning/planner";
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -22,12 +23,12 @@ export async function POST(request: Request) {
   }
 
   // 3. Вызов сервиса
-  // TODO: вызвать runStudyPlan() из lib/services/planner.ts
-  return NextResponse.json({
-    ok: true,
-    workflow: "study_plan",
-    plan: null,
-    message: "Study plan builder не реализован."
-  });
+  try {
+    const result = await runStudyPlan(text as string);
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error("[api/planner/build] service error:", err);
+    return ERRORS.INTERNAL("Не удалось составить учебный план.");
+  }
 }
 

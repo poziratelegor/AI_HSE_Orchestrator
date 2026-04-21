@@ -4,14 +4,12 @@ import { processDocument } from "@/lib/services/documents/ingestion";
 import { getSupabaseServerClient, getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
 
-const ALLOWED_MIME_TYPES = [
+const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
   "text/plain",
-  "audio/mpeg",
-  "audio/mp4",
-  "audio/wav",
-  "audio/ogg"
-];
+  "audio/mpeg", "audio/mp4", "audio/wav", "audio/ogg", "audio/webm",
+  "audio/x-m4a", "audio/flac",
+]);
 
 const MAX_UPLOAD_SIZE_MB = Number(process.env.MAX_UPLOAD_SIZE_MB ?? 20);
 
@@ -61,10 +59,27 @@ export async function POST(request: Request) {
     ? mimeTypeValue
     : fileValue.type;
 
-  if (!mimeType || !ALLOWED_MIME_TYPES.includes(mimeType)) {
-    return ERRORS.INVALID_INPUT(
-      `Неподдерживаемый тип файла. Допустимы: ${ALLOWED_MIME_TYPES.join(", ")}.`
-    );
+  const declaredType = mimeType;
+  if (!declaredType || !ALLOWED_MIME_TYPES.has(declaredType)) {
+    return ERRORS.INVALID_INPUT("Поддерживаются: PDF, TXT, аудиофайлы");
+  }
+
+  // Magic bytes validation — guard against MIME spoofing
+  const headerBytes = await fileValue.slice(0, 4).arrayBuffer();
+  const magic = new Uint8Array(headerBytes);
+  const isPdf = magic[0] === 0x25 && magic[1] === 0x50; // %P
+  const isOgg = magic[0] === 0x4F && magic[1] === 0x67; // Og
+  const isMp3 = magic[0] === 0xFF && (magic[1] & 0xE0) === 0xE0;
+  const isId3 = magic[0] === 0x49 && magic[1] === 0x44 && magic[2] === 0x33; // ID3
+
+  if (declaredType === "application/pdf" && !isPdf) {
+    return NextResponse.json({ ok: false, error: "invalid_file_type", message: "Поддерживаются: PDF, TXT, аудиофайлы" }, { status: 400 });
+  }
+  if ((declaredType === "audio/mpeg") && !isMp3 && !isId3) {
+    return NextResponse.json({ ok: false, error: "invalid_file_type", message: "Поддерживаются: PDF, TXT, аудиофайлы" }, { status: 400 });
+  }
+  if (declaredType === "audio/ogg" && !isOgg) {
+    return NextResponse.json({ ok: false, error: "invalid_file_type", message: "Поддерживаются: PDF, TXT, аудиофайлы" }, { status: 400 });
   }
 
   const sizeBytes = fileValue.size;

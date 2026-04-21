@@ -1,22 +1,9 @@
-import { getOpenAIClient } from "@/lib/ai/client";
+import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
+import { withRetry } from "@/lib/ai/retry";
+import { buildLetterPrompt } from "@/lib/ai/prompts";
+import { loadStudentContext } from "@/lib/ai/student-context";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-
-const SYSTEM_PROMPT = `
-Ты — ассистент для написания официальных академических писем на русском языке.
-Пиши строго официально, вежливо, структурированно и по делу.
-Тон: уважительный, академический, без лишних слов и воды.
-
-Структура письма:
-- Приветствие (Уважаемый / Уважаемая...)
-- Суть обращения
-- Обоснование или просьба
-- Заключительная формула вежливости
-- Подпись (С уважением, Студент)
-
-Возвращай ответ СТРОГО в формате JSON без markdown и без пояснений:
-{"subject":"Краткая тема письма","body":"Полный текст письма"}
-`.trim();
 
 type LetterResult = {
   ok: true;
@@ -66,21 +53,27 @@ export async function runLetterGenerator(text: string, ctx?: WorkflowContext): P
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
+  // Load student context for personalized signature (cached)
+  const studentCtx = ctx?.userId ? await loadStudentContext(ctx.userId) : null;
+  const systemPrompt = buildLetterPrompt(studentCtx);
+
   try {
-    const completion = await openai.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL ?? "gpt-4o",
-        temperature: 0.3,
-        max_tokens: 1000,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Напиши официальное письмо на основе следующего запроса студента:\n\n${text}`
-          }
-        ]
-      },
-      { signal: controller.signal }
+    const completion = await withRetry(() =>
+      openai.chat.completions.create(
+        {
+          model: DEFAULT_MODEL,
+          temperature: 0.3,
+          max_tokens: 1200,
+          messages: [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: `Напиши официальное письмо на основе следующего запроса студента:\n\n${text}`
+            }
+          ]
+        },
+        { signal: controller.signal }
+      )
     );
 
     clearTimeout(timeout);

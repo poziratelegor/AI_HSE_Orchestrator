@@ -5,6 +5,8 @@ import {
   ActionButton,
   DataTableShell,
   EmptyState,
+  FilterBar,
+  FilterPill,
   InlineAlert,
   SectionCard,
   SkeletonRow,
@@ -46,19 +48,66 @@ const STATUS_RU: Record<string, string> = {
   failed: "Ошибка"
 };
 
+type StatusFilter = "all" | "in_progress" | "ready" | "partial" | "failed";
+
+const FILTER_LABELS: Record<StatusFilter, string> = {
+  all: "Все",
+  in_progress: "В обработке",
+  ready: "Готово",
+  partial: "Частично",
+  failed: "Ошибка"
+};
+
+function isStatusFilter(value: string | null): value is StatusFilter {
+  return value === "all" || value === "in_progress" || value === "ready" || value === "partial" || value === "failed";
+}
+
 export default function DocumentsClient({ initialDocuments, loadError = null }: Props) {
   const [documents, setDocuments] = useState<DocumentRow[]>(initialDocuments);
   const [error, setError] = useState<string | null>(loadError);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const inputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
+
+  // Initialize filter from URL on mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get("status");
+    if (isStatusFilter(fromUrl)) {
+      setStatusFilter(fromUrl);
+    }
+  }, []);
+
+  const handleFilterChange = (next: StatusFilter) => {
+    setStatusFilter(next);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (next === "all") {
+      params.delete("status");
+    } else {
+      params.set("status", next);
+    }
+    const search = params.toString();
+    const newUrl = `${window.location.pathname}${search ? `?${search}` : ""}`;
+    window.history.replaceState(null, "", newUrl);
+  };
 
   const hasProcessing = useMemo(
     () => documents.some((d) => d.processing_status === "processing" || d.processing_status === "pending"),
     [documents]
   );
+
+  const filteredDocuments = useMemo(() => {
+    if (statusFilter === "all") return documents;
+    if (statusFilter === "in_progress") {
+      return documents.filter((d) => d.processing_status === "processing" || d.processing_status === "pending");
+    }
+    return documents.filter((d) => d.processing_status === statusFilter);
+  }, [documents, statusFilter]);
 
   const refreshDocuments = async () => {
     const supabase = getSupabaseBrowserClient();
@@ -158,7 +207,7 @@ export default function DocumentsClient({ initialDocuments, loadError = null }: 
     if (file) await uploadFile(file);
   };
 
-  const rows = documents.map((doc) => {
+  const rows = filteredDocuments.map((doc) => {
     const status = doc.processing_status ?? "pending";
     const tone =
       status === "ready" ? "success" :
@@ -276,6 +325,21 @@ export default function DocumentsClient({ initialDocuments, loadError = null }: 
 
           {error && <InlineAlert message={error} tone="danger" />}
 
+          {documents.length > 0 && (
+            <div className="mb-4 animate-fade-in">
+              <FilterBar>
+                {(Object.keys(FILTER_LABELS) as StatusFilter[]).map((key) => (
+                  <FilterPill
+                    key={key}
+                    label={FILTER_LABELS[key]}
+                    active={statusFilter === key}
+                    onClick={() => handleFilterChange(key)}
+                  />
+                ))}
+              </FilterBar>
+            </div>
+          )}
+
           {documents.length === 0 ? (
             <div className="animate-fade-in">
               <EmptyState
@@ -285,6 +349,20 @@ export default function DocumentsClient({ initialDocuments, loadError = null }: 
                   <ActionButton
                     label="Выбрать файл"
                     onClick={() => inputRef.current?.click()}
+                  />
+                }
+              />
+            </div>
+          ) : filteredDocuments.length === 0 ? (
+            <div className="animate-fade-in">
+              <EmptyState
+                title="По выбранному фильтру ничего нет"
+                description={`Документов в статусе «${FILTER_LABELS[statusFilter]}» сейчас нет. Выберите другой фильтр или загрузите новый файл.`}
+                action={
+                  <ActionButton
+                    label="Показать все"
+                    onClick={() => handleFilterChange("all")}
+                    secondary
                   />
                 }
               />

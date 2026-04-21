@@ -5,21 +5,11 @@ import { expandQuery } from "@/lib/rag/expand-query";
 import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
 import { withRetry } from "@/lib/ai/retry";
 import { guardContext } from "@/lib/ai/token-guard";
+import { buildRagQaPrompt } from "@/lib/ai/prompts";
+import { loadStudentContext } from "@/lib/ai/student-context";
 
 const MAX_CHUNKS = 8;
 const RETRIEVAL_THRESHOLD = 0.42;
-
-const SYSTEM_PROMPT = `
-Ты — учебный ассистент StudyFlow AI. Отвечаешь ТОЛЬКО на основе предоставленного контекста из документов студента.
-
-ПРАВИЛА ОТВЕТА:
-1. Отвечай строго по контексту — не добавляй знания «из головы».
-2. Ссылайся на источники в формате [1], [2] после каждого утверждения, взятого из конкретного фрагмента.
-3. Если в контексте нет достаточной информации — честно скажи: «В загруженных материалах нет ответа на этот вопрос».
-4. Структурируй ответ: используй списки или абзацы, избегай воды.
-5. Язык ответа — русский, если вопрос не задан на другом языке.
-6. Если несколько фрагментов говорят об одном — объединяй информацию, не дублируй.
-`.trim();
 
 /**
  * Deduplicates retrieved chunks by chunk id, keeping the highest similarity score.
@@ -49,8 +39,11 @@ export async function runRagQa(text: string, ctx?: WorkflowContext): Promise<unk
     };
   }
 
-  // 1. Expand query to increase recall
-  const queries = await expandQuery(text);
+  // 1. Load student context (cached) and expand query in parallel
+  const [studentCtx, queries] = await Promise.all([
+    loadStudentContext(userId),
+    expandQuery(text)
+  ]);
 
   // 2. Retrieve chunks for each query variant in parallel
   const retrievalResults = await Promise.all(
@@ -79,16 +72,19 @@ export async function runRagQa(text: string, ctx?: WorkflowContext): Promise<unk
     };
   }
 
-  // 4. Guard context length before building prompt
-  const model = DEFAULT_MODEL;
-  const safeChunks = guardContext(allChunks, model, SYSTEM_PROMPT.length, text.length);
+  // 4. Build personalized system prompt with student context
+  const systemPrompt = buildRagQaPrompt(studentCtx);
 
-  // 5. Build numbered context block (ordered by relevance)
+  // 5. Guard context length before building user message
+  const model = DEFAULT_MODEL;
+  const safeChunks = guardContext(allChunks, model, systemPrompt.length, text.length);
+
+  // 6. Build numbered context block (ordered by relevance)
   const contextBlock = safeChunks
     .map((chunk, i) => `[${i + 1}] (из «${chunk.document_title}»)\n${chunk.chunk_text}`)
     .join("\n\n---\n\n");
 
-  // 6. Generate answer with retry
+  // 7. Generate answer with retry
   const openai = getOpenAIClient();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
@@ -101,7 +97,7 @@ export async function runRagQa(text: string, ctx?: WorkflowContext): Promise<unk
           temperature: 0.15,
           max_tokens: 1500,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: systemPrompt },
             {
               role: "user",
               content: `КОНТЕКСТ ИЗ ЗАГРУЖЕННЫХ МАТЕРИАЛОВ:\n\n${contextBlock}\n\n---\n\nВОПРОС СТУДЕНТА:\n${text}`

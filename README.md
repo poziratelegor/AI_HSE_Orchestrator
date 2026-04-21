@@ -1,159 +1,290 @@
+<div align="center">
+
 # StudyFlow AI
 
-AI-оркестратор для учебных задач: один вход на естественном языке, маршрутизация в workflow, единый API для Web и Telegram.
+**AI-оркестратор, который маршрутизирует запросы студентов на естественном языке в нужный рабочий процесс**
 
-## Для чего этот репозиторий
+<img src="https://img.shields.io/badge/Next.js-15-black?logo=next.js" alt="Next.js"/>
+<img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white" alt="TypeScript"/>
+<img src="https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E?logo=supabase&logoColor=white" alt="Supabase"/>
+<img src="https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?logo=openai&logoColor=white" alt="OpenAI"/>
+<img src="https://img.shields.io/badge/pgvector-RAG-blueviolet" alt="pgvector"/>
+<img src="https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white" alt="Docker"/>
 
-Это **engineering starter**:
-- каркас оркестратора и API уже работает;
-- схема БД и миграции подготовлены;
-- большая часть сервисной логики (`lib/services/*`, часть RAG, аналитика, Telegram handlers) пока в виде stub-реализаций.
+*Опиши задачу своими словами. StudyFlow выберет нужный инструмент и выполнит работу.*
 
-Если вы начинаете работу в проекте впервые, стартуйте с:
-1. этого README;
-2. `product_v2.md` (продуктовые цели и ограничения);
-3. `docs/architecture.md`.
+</div>
 
 ---
 
-## Текущее состояние (коротко)
+## Как это работает
 
-| Область | Статус | Комментарий |
+Студент пишет запрос в **веб-приложении** или **Telegram-боте** на естественном языке. Система классифицирует намерение с помощью LLM, маршрутизирует запрос в один из девяти AI-воркфлоу и возвращает структурированный результат.
+
+```
+"Найди что Кейнс говорил про спрос в моих конспектах"
+           ↓  классификация  (GPT-4o + keyword fallback)
+           ↓  intent = rag_qa  |  confidence = 0.91
+           ↓  выполнение  → pgvector поиск → синтез GPT-4o-mini
+           ↓
+     { answer, citations: [{ title, excerpt, similarity }] }
+```
+
+---
+
+## Воркфлоу
+
+| Воркфлоу | Пример запроса | Результат |
 |---|---|---|
-| Orchestrator (`lib/orchestrator/*`) | ✅ | Registry + rules-based классификация + fallback работают |
-| API handlers (`app/api/*`) | ✅/⚠️ | Auth и базовая валидация есть; бизнес-логика частично stub |
-| Supabase clients (`lib/supabase/client.ts`, `server.ts`) | ✅ | Рабочие клиенты для browser/server |
-| Services (`lib/services/*`) | ⚠️ | В основном placeholder-ответы |
-| RAG (`lib/rag/*`) | ⚠️ | Chunking базовый; embed/retrieve/citations не доведены |
-| Telegram webhook | ⚠️ | Верификация секрета есть, обработчик обновлений не подключён |
-| Analytics (`lib/analytics/*`) | ⚠️ | Каркас без полноценной записи/агрегаций |
-| RLS policies (`supabase/policies.sql`) | ⚠️ | TODO, политики нужно дописать перед production |
+| `rag_qa` | «Что написано в главе 3 про монополии?» | Ответ с цитатами из документов |
+| `letter_generator` | «Напиши заявление на академотпуск декану» | Текст официального письма |
+| `task_extractor` | «Выдели все дедлайны из этой программы курса» | Структурированный список задач с датами |
+| `lecture_insight` | «Сделай конспект этой 2-часовой записи» | Заголовок, резюме, ключевые тезисы, определения |
+| `study_plan` | «Составь план подготовки к экзамену на 2 недели» | Расписание по дням |
+| `quiz_generator` | «Сделай тест по главе 3» | MCQ + открытые вопросы |
+| `cheat_sheet` | «Сожми это в шпаргалку» | Плотное резюме с терминологией |
+| `explain_this` | «Объясни предельную полезность простыми словами» | Объяснение с примерами |
+| `route_recommender` | *(неоднозначный запрос)* | UI с карточками воркфлоу для уточнения |
+
+---
+
+## Архитектура
+
+```mermaid
+graph TB
+    subgraph Channels["Каналы ввода"]
+        WEB["🌐 Веб-приложение\nNext.js 15"]
+        TG["✈️ Telegram-бот"]
+    end
+
+    subgraph API["API-слой (Route Handlers)"]
+        ORCH["POST /api/orchestrate"]
+        UPLOAD["POST /api/upload"]
+        RAG_API["POST /api/rag/query"]
+        TG_WH["POST /api/telegram/webhook"]
+    end
+
+    subgraph Orchestrator["Движок оркестратора"]
+        ROUTER["Router"]
+        CLASSIFY["Классификатор намерений\n━━━━━━━━━━━━\nLLM (GPT-4o) ‖ Ключевые слова\nпараллельно, таймаут 8 с"]
+        EXECUTOR["Исполнитель воркфлоу"]
+        REGISTRY["Реестр · 9 воркфлоу"]
+    end
+
+    subgraph Services["Сервисы воркфлоу"]
+        S1["rag_qa"]
+        S2["letter_generator"]
+        S3["task_extractor"]
+        S4["lecture_insight"]
+        S5["study_plan · quiz\ncheatsheet · explain"]
+    end
+
+    subgraph RAG["RAG-пайплайн"]
+        CHUNK["Чанкер\n800 токенов, overlap 2 предложения"]
+        EMBED["Эмбеддер\ntext-embedding-3-small\n1536 измерений"]
+        RETRIEVE["pgvector поиск\ncosine similarity ≥ 0.5"]
+        EXPAND["Расширение запроса\n3 варианта от LLM"]
+    end
+
+    subgraph Infra["Инфраструктура"]
+        DB[("Supabase\nPostgreSQL + pgvector")]
+        AI["OpenAI\nGPT-4o-mini · Whisper"]
+        CACHE[("Upstash Redis\nКэш RAG 1 ч · rate limit")]
+    end
+
+    WEB --> ORCH & UPLOAD & RAG_API
+    TG --> TG_WH
+    ORCH --> ROUTER
+    ROUTER --> CLASSIFY --> EXECUTOR --> REGISTRY
+    REGISTRY --> S1 & S2 & S3 & S4 & S5
+    S1 --> RAG
+    UPLOAD --> RAG
+    RAG --> DB & AI
+    Services --> AI
+    API --> CACHE & DB
+```
+
+**Политика confidence** — классификатор возвращает оценку уверенности от 0.0 до 1.0:
+
+| Оценка | Действие |
+|---|---|
+| ≥ 0.75 | Выполнить воркфлоу напрямую |
+| 0.45 – 0.74 | Показать WorkflowPicker, уточнить намерение |
+| < 0.45 | Общий fallback со списком всех воркфлоу |
+
+---
+
+## Технологический стек
+
+| Слой | Технология |
+|---|---|
+| Фреймворк | Next.js 15 · App Router · Turbopack |
+| Язык | TypeScript 5.7 (strict) |
+| База данных | Supabase · PostgreSQL 15 · RLS |
+| Векторный поиск | pgvector · косинусное сходство, 1536 измерений |
+| LLM | OpenAI GPT-4o-mini (классификация + генерация) |
+| Эмбеддинги | OpenAI text-embedding-3-small |
+| Speech-to-Text | OpenAI Whisper |
+| Кэш | Upstash Redis REST API (без SDK) |
+| Стили | Tailwind CSS 3 + дизайн-система ВШЭ (CSS-переменные) |
+| Мониторинг ошибок | Sentry |
+| Бот | Telegram Bot API |
+| Контейнер | Docker multi-stage build |
 
 ---
 
 ## Быстрый старт
 
-### 1) Требования
-- Node.js 20+
-- npm 10+
-- Supabase project
-- OpenAI API key
+### Docker (рекомендуется)
 
-### 2) Установка
+```bash
+git clone https://github.com/your-org/studyflow-ai
+cd studyflow-ai
+cp .env.example .env.local   # заполнить все ключи
+
+docker compose up --build
+# → http://localhost:3000
+```
+
+### Локальная разработка
 
 ```bash
 npm install
-cp .env.example .env.local
+npm run dev    # Turbopack → http://localhost:3000
 ```
 
-### 3) Обязательные переменные
+### Обязательные переменные окружения
 
 ```env
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon_key>
-SUPABASE_SERVICE_ROLE_KEY=<service_role_key>
-OPENAI_API_KEY=<openai_key>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
+SUPABASE_SERVICE_ROLE_KEY=<service role key>   # только сервер, не публиковать
+OPENAI_API_KEY=sk-...                          # только сервер
+TELEGRAM_BOT_TOKEN=<bot token>                 # только сервер
+TELEGRAM_WEBHOOK_SECRET=<случайный hex 32 байта>
 ```
 
-### 4) Рекомендуемые переменные
+Полный список с описанием — [.env.example](.env.example)
 
-```env
-OPENAI_MODEL=gpt-4o
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-ORCHESTRATOR_CONFIDENCE_THRESHOLD=0.45
-RAG_CHUNK_SIZE=512
-RAG_CHUNK_OVERLAP=64
-RAG_TOP_K=5
-MAX_UPLOAD_SIZE_MB=20
-INPUT_TEXT_RETENTION_DAYS=90
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_WEBHOOK_SECRET=
-```
-
-### 5) База данных
+### Применение миграций БД
 
 ```bash
+# Вариант 1 — Supabase CLI
 npx supabase db push
+
+# Вариант 2 — вручную (Supabase Dashboard → SQL Editor)
+# Запустить файлы из supabase/migrations/ по порядку: 0001 → 0006
 ```
 
-> `supabase/policies.sql` сейчас содержит TODO-комментарии. Для production требуется вручную добавить и применить RLS-политики.
-
-### 6) Запуск
+### Регистрация Telegram-вебхука (локально)
 
 ```bash
-npm run dev
-```
+# Открыть публичный HTTPS-туннель
+cloudflared tunnel --url http://localhost:3000
 
-Приложение: `http://localhost:3000`.
-
----
-
-## Основной runtime flow
-
-```text
-POST /api/orchestrate
-  -> classifyIntent() через registry keywords
-  -> confidence policy
-  -> executeWorkflow() или fallback
-  -> JSON ответ
-```
-
-Кодовые точки:
-- `lib/orchestrator/router.ts`
-- `lib/orchestrator/classify.ts`
-- `lib/orchestrator/registry.ts`
-- `lib/orchestrator/executor.ts`
-
----
-
-## Структура репозитория
-
-```text
-app/                 # Next.js app router + API handlers
-lib/orchestrator/    # intent classification, routing, execution
-lib/services/        # workflow implementations (mostly stubs)
-lib/rag/             # chunk/embed/retrieve/citations
-lib/ai/          # OpenAI client + prompts/schemas
-lib/supabase/        # Supabase client/server/middleware
-lib/telegram/        # bot + handlers
-lib/analytics/       # events/funnel/metrics
-supabase/            # migrations, policies, seed
-docs/                # technical docs
-scripts/             # seed / ingest / backfill
+# Задать в .env.local: NEXT_PUBLIC_APP_URL=https://xxxx.trycloudflare.com
+npx tsx scripts/setup-telegram-webhook.ts
 ```
 
 ---
 
-## Команды разработки
+## Структура проекта
 
-```bash
-npm run dev
-npm run build
-npm run lint
-npx tsc --noEmit
-npx tsx scripts/seed.ts
-npx tsx scripts/ingest-documents.ts
-npx tsx scripts/backfill-analytics.ts
+```
+├── app/
+│   ├── (auth)/           # Вход · Регистрация · OAuth callback · Профиль
+│   ├── (marketing)/      # Лендинг / страница воронки
+│   ├── api/              # Route handlers — auth → валидация → сервис → JSON
+│   │   ├── orchestrate/  # Главная точка входа
+│   │   ├── upload/       # Асинхронная загрузка файлов
+│   │   ├── rag/query/    # Семантический поиск с Redis-кэшем
+│   │   ├── telegram/     # Вебхук с проверкой секрета
+│   │   └── ...           # letters · tasks · quiz · planner · transcribe · analytics
+│   └── dashboard/        # Ассистент · Документы · Лекции · Письма · Задачи · Аналитика
+│
+├── lib/
+│   ├── orchestrator/     # Router · Classifier (LLM+KW) · Registry · Executor · Policies
+│   ├── services/
+│   │   ├── content/      # rag-qa · lecture-insight · explain · cheatsheet · quiz
+│   │   ├── planning/     # tasks · planner
+│   │   ├── communication/# letters
+│   │   └── documents/    # ingestion (PDF/audio → chunk → embed) · transcribe
+│   ├── rag/              # chunk · embed · retrieve · expand-query · citations
+│   ├── ai/               # OpenAI client · prompts · retry · token-guard · schemas
+│   ├── repository/       # Доступ к данным — auth · documents · letters · tasks
+│   ├── integrations/     # YouTube транскрипты · HSE SmartLMS · iCalendar (RFC 5545)
+│   ├── cache/            # Обёртка Upstash Redis (fetch-based, без SDK)
+│   └── supabase/         # Клиенты browser + server · auth middleware
+│
+├── components/
+│   ├── auth/             # AuthShell · GoogleSignInButton · LogoutButton
+│   └── dashboard/        # SidebarNav · WorkflowPicker · HowItWorks · UI-примитивы
+│
+├── supabase/
+│   ├── migrations/       # 0001_init → 0006_user_roles (9 таблиц + pgvector)
+│   └── policies.sql      # Row Level Security политики
+│
+├── scripts/              # setup-telegram-webhook · grant-admin · ingest-documents · seed
+├── docs/                 # Архитектура · БД · API · Оркестратор · RAG · ADR
+├── Dockerfile            # 3 стадии: deps → builder → runner (node:22-alpine)
+└── docker-compose.yml
 ```
 
 ---
 
-## Навигация по документации
+## Краткий справочник API
 
-- `docs/architecture.md` — слои и архитектурные инварианты
-- `docs/orchestrator.md` — логика маршрутизации и confidence policy
-- `docs/api.md` — API контракты и ошибки
-- `docs/database.md` — сущности и жизненные циклы данных
-- `docs/deployment.md` — деплой и операционные проверки
-- `docs/roadmap.md` — приоритеты реализации
-- `docs/adr/*` — архитектурные решения
+Все endpoints требуют `Authorization: Bearer <supabase_jwt>`, кроме `/api/telegram/webhook`.
+
+| Метод | Endpoint | Описание |
+|---|---|---|
+| `POST` | `/api/orchestrate` | Текст → классификация намерения → выполнение воркфлоу |
+| `POST` | `/api/upload` | Загрузка PDF / TXT / аудио (асинхронная обработка) |
+| `GET` | `/api/documents/:id/status` | Опрос статуса обработки документа |
+| `POST` | `/api/rag/query` | Семантический вопрос-ответ по документам |
+| `POST` | `/api/chat` | Диалоговый ассистент |
+| `POST` | `/api/letters/generate` | Генерация официального письма |
+| `POST` | `/api/tasks/extract` | Извлечение задач и дедлайнов |
+| `POST` | `/api/quiz/generate` | Генерация тестовых вопросов |
+| `POST` | `/api/cheatsheet/generate` | Генерация шпаргалки |
+| `POST` | `/api/planner/build` | Составление учебного плана |
+| `POST` | `/api/lecture-notes` | Конспект по транскрипту аудио |
+| `POST` | `/api/transcribe` | Аудиофайл → текст (Whisper) |
+| `POST` | `/api/transcribe/microphone` | Запись с микрофона браузера → текст |
+| `POST` | `/api/telegram/webhook` | Обновления Telegram Bot |
+| `POST` | `/api/analytics/event` | Запись события продуктовой аналитики |
+| `GET` | `/api/health` | Health check |
+
+Полные схемы запросов/ответов → [docs/api.md](docs/api.md)
 
 ---
 
-## Open questions / Assumptions
+## Документация
 
-1. **Пороговая политика роутера**: в коде сейчас фактически бинарное поведение (execute/fallback), хотя документация описывает 3 зоны (`execute/recommend/clarify`).
-2. **Upload pipeline**: endpoint пока принимает JSON-метаданные, а не multipart-файл; это допущение для scaffold-этапа.
-3. **Telegram processing**: webhook подтверждает запрос, но бизнес-обработка update пока intentionally отключена.
-4. **RLS**: считаем, что до production релиза политики будут реализованы отдельно в `supabase/policies.sql`.
+| Файл | Содержание |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Слои системы, компонентная диаграмма, архитектурные инварианты |
+| [docs/orchestrator.md](docs/orchestrator.md) | Sequence diagram, стратегия классификации, политика confidence |
+| [docs/database.md](docs/database.md) | ERD, описание таблиц, проектирование RLS |
+| [docs/rag.md](docs/rag.md) | RAG-пайплайн, алгоритм чанкинга, стратегия эмбеддингов |
+| [docs/api.md](docs/api.md) | Полный справочник API со схемами запросов/ответов |
+| [docs/deployment.md](docs/deployment.md) | Docker, Vercel, настройка Telegram-вебхука, admin |
+| [docs/adr/](docs/adr/) | Architecture Decision Records |
+
+---
+
+## Архитектурные инварианты
+
+1. **Единый реестр** — добавление воркфлоу = одна запись в `lib/orchestrator/registry.ts`, больше ничего не меняется
+2. **Сервисы без HTTP** — `lib/services/*` вызываются одинаково из route handler, Telegram-вебхука и CLI-скрипта
+3. **Секреты только на сервере** — `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN` никогда не попадают в клиентский бандл
+4. **Загрузка не блокирует** — `/api/upload` отвечает за <500 мс; чанкинг и эмбеддинги выполняются через `waitUntil()`
+5. **Telegram всегда 200** — все ошибки логируются внутри; вебхук никогда не бросает исключение наружу
+6. **RLS на всех пользовательских таблицах** — `service_role` клиент используется только в фоновых задачах
+
+---
+
+## Лицензия
+
+MIT © 2025 StudyFlow AI

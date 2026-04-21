@@ -1,20 +1,8 @@
-import { getOpenAIClient } from "@/lib/ai/client";
+import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
+import { withRetry } from "@/lib/ai/retry";
+import { buildStudyPlanPrompt } from "@/lib/ai/prompts";
+import { loadStudentContext } from "@/lib/ai/student-context";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
-
-function buildSystemPrompt(today: string): string {
-  return `
-Составь учебный план подготовки. Возвращай ТОЛЬКО JSON:
-{"goal":"цель из запроса",
- "total_days": N,
- "daily_plan":[
-   {"day":1,"date":"YYYY-MM-DD","theme":"тема дня",
-    "tasks":["задача1","задача2"],"duration_hours":2}
- ],
- "resources":["что изучить"],
- "tips":["совет"]}
-Сегодня: ${today}. Если срок не указан — план на 7 дней.
-`.trim();
-}
 
 type DailyPlanItem = {
   day: number;
@@ -41,25 +29,31 @@ type StudyPlanResult =
 
 export async function runStudyPlan(
   text: string,
-  _ctx?: WorkflowContext
+  ctx?: WorkflowContext
 ): Promise<StudyPlanResult> {
   const today = new Date().toISOString().slice(0, 10);
   const openai = getOpenAIClient();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
+  // Load student context for course-level adaptation (cached)
+  const studentCtx = ctx?.userId ? await loadStudentContext(ctx.userId) : null;
+  const systemPrompt = buildStudyPlanPrompt(today, studentCtx);
+
   try {
-    const completion = await openai.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL ?? "gpt-4o",
-        temperature: 0.3,
-        max_tokens: 2000,
-        messages: [
-          { role: "system", content: buildSystemPrompt(today) },
-          { role: "user", content: text }
-        ]
-      },
-      { signal: controller.signal }
+    const completion = await withRetry(() =>
+      openai.chat.completions.create(
+        {
+          model: DEFAULT_MODEL,
+          temperature: 0.3,
+          max_tokens: 2500,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: text }
+          ]
+        },
+        { signal: controller.signal }
+      )
     );
 
     clearTimeout(timeout);
@@ -92,11 +86,12 @@ export async function runStudyPlan(
         data: { goal, total_days, daily_plan, resources, tips }
       };
     } catch {
+      // Graceful degradation: return raw LLM text as the plan
       return {
-        ok: false,
+        ok: true,
         workflow: "study_plan",
-        error: "parse_error",
-        message: "Не удалось разобрать ответ модели как JSON."
+        summary: "Учебный план (свободная форма)",
+        data: { goal: "Учебный план", total_days: 0, daily_plan: [], resources: [raw], tips: [] }
       };
     }
   } catch (err: unknown) {

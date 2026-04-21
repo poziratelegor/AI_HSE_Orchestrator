@@ -1,135 +1,402 @@
-# API
+# Справочник API
 
 ## Общие правила
 
-- Формат: JSON request/response.
-- Auth: все endpoint'ы требуют Supabase access token, **кроме** `POST /api/telegram/webhook`.
-- Header для авторизации:
+**Базовый URL:** `http://localhost:3000` (разработка) или `NEXT_PUBLIC_APP_URL` (прод)
 
-```http
-Authorization: Bearer <supabase_access_token>
+**Аутентификация:** Все endpoints требуют `Authorization: Bearer <supabase_jwt>`, кроме:
+- `POST /api/telegram/webhook` — проверяется заголовком `X-Telegram-Bot-Api-Secret-Token`
+- `GET /api/health` — публичный
+
+**Конверт ответа:**
+
+```typescript
+// Успех
+{ ok: true, ...payload }
+
+// Ошибка
+{ ok: false, error: "код_ошибки", message: "Описание для пользователя" }
 ```
 
-- Единый формат ошибок:
+**Типичные коды ошибок:**
 
-```json
-{
-  "ok": false,
-  "error": "invalid_input",
-  "message": "Человекочитаемое описание"
-}
-```
-
-### Типовые коды ошибок
-
-| HTTP | `error` | Смысл |
+| Код | HTTP | Значение |
 |---|---|---|
-| 400 | `invalid_input` | Невалидный или неполный payload |
-| 401 | `unauthorized` | Нет валидной авторизации |
-| 500 | `internal_error` | Ошибка на стороне сервера |
+| `unauthorized` | 401 | Отсутствует или невалидный JWT |
+| `invalid_input` | 400 | Отсутствующее или неверного типа поле |
+| `not_found` | 404 | Ресурс не существует или принадлежит другому пользователю |
+| `rate_limited` | 429 | Слишком много запросов |
+| `classification_failed` | 500 | Внутренняя ошибка оркестратора |
+| `service_error` | 500 | Сервис воркфлоу выбросил ошибку |
 
 ---
 
-## Endpoint'ы
+## Endpoints
 
 ### `POST /api/orchestrate`
-Главная точка маршрутизации пользовательского текста.
 
-**Request**
+Главная точка входа. Классифицирует намерение и направляет в соответствующий воркфлоу.
+
+**Запрос:**
 ```json
 {
-  "text": "Напиши письмо преподавателю о переносе дедлайна",
+  "text": "Найди в моих конспектах что Кейнс говорил про спрос",
   "channel": "web",
   "attachments": []
 }
 ```
 
-Поля:
-- `text` (string, required)
-- `channel` (`web | telegram`, optional, default `web`)
-- `attachments` (array, optional)
-
----
-
-### `POST /api/upload`
-Принимает метаданные документа для асинхронной обработки.
-
-> Текущий scaffold: endpoint валидирует поля и возвращает `pending`, но не сохраняет файл и не запускает реальный ingestion pipeline.
-
-**Request**
+**Ответ (успех — воркфлоу выполнен):**
 ```json
 {
-  "title": "Лекция по матанализу",
-  "mimeType": "application/pdf",
-  "sizeBytes": 1048576
+  "ok": true,
+  "workflow": "rag_qa",
+  "intent": "rag_qa",
+  "confidence": 0.91,
+  "reason": "Пользователь попросил найти информацию в материалах",
+  "needsClarification": false,
+  "result": { ... }
+}
+```
+
+**Ответ (низкий confidence — нужно уточнение):**
+```json
+{
+  "ok": true,
+  "intent": "route_recommender",
+  "confidence": 0.38,
+  "needsClarification": true,
+  "clarificationQuestion": "Уточни, что именно тебе нужно...",
+  "suggestions": ["rag_qa", "explain_this", "cheat_sheet"]
 }
 ```
 
 ---
 
-### `POST /api/rag/query`
-Вопрос по пользовательским материалам (workflow `rag_qa`).
+### `POST /api/upload`
 
-**Request**
+Загрузить документ для асинхронной обработки. Отвечает немедленно — обработка идёт в фоне.
+
+**Запрос:** `multipart/form-data`
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `file` | File | PDF, TXT, MP3, MP4, WAV, OGG, WebM — макс. 20 МБ |
+| `title` | string | Отображаемое название (опционально, по умолчанию — имя файла) |
+
+Проверяется: MIME-тип + magic bytes (PDF: `%PDF`, MP3: ID3/sync bits, OGG: `OggS`)
+
+**Ответ:**
 ```json
 {
-  "question": "Что такое интеграл Римана?"
+  "ok": true,
+  "documentId": "uuid",
+  "message": "Принят в обработку"
+}
+```
+
+**Статус обработки:** опрашивать через `GET /api/documents/:id/status`
+
+---
+
+### `GET /api/documents/:id/status`
+
+Опрос статуса обработки документа.
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "id": "uuid",
+  "status": "ready",
+  "chunkCount": 42,
+  "error": null
+}
+```
+
+Значения `status`: `pending` | `processing` | `ready` | `partial` | `failed`
+
+---
+
+### `POST /api/rag/query`
+
+Семантический поиск по загруженным документам пользователя.
+
+**Запрос:**
+```json
+{
+  "query": "что такое эффективный спрос по Кейнсу?"
+}
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "answer": "По Кейнсу, эффективный спрос — это...",
+  "citations": [
+    {
+      "documentTitle": "Макроэкономика лекция 3.pdf",
+      "excerpt": "...эффективный спрос определяется как точка пересечения...",
+      "chunkIndex": 7,
+      "similarity": 0.87
+    }
+  ],
+  "cached": false
+}
+```
+
+Ответы кэшируются в Redis на 1 час (ключ: `rag:{userId}:{sha256(query)}`).
+
+---
+
+### `POST /api/chat`
+
+Диалоговый ассистент. Поддерживает контекст сессии через `conversationId`.
+
+**Запрос:**
+```json
+{
+  "message": "А расскажи подробнее про мультипликатор",
+  "conversationId": "uuid-or-null"
+}
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "reply": "Мультипликатор Кейнса показывает...",
+  "conversationId": "uuid"
+}
+```
+
+---
+
+### `POST /api/letters/generate`
+
+Генерация официального письма.
+
+**Запрос:**
+```json
+{
+  "type": "leave_request",
+  "details": "Прошу предоставить академический отпуск с 01.09.2025 по причине...",
+  "recipient": "Декану факультета экономики"
+}
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "letter": "Декану факультета экономики\n\nЗаявление\n\nПрошу..."
+}
+```
+
+---
+
+### `POST /api/tasks/extract`
+
+Извлечение структурированных задач и дедлайнов из произвольного текста.
+
+**Запрос:**
+```json
+{
+  "text": "Сдать курсовую до 15 мая, защита диплома 20 июня, коллоквиум по микро в пятницу"
+}
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "tasks": [
+    { "title": "Сдать курсовую работу", "dueDate": "2025-05-15", "source": "text" },
+    { "title": "Защита диплома",        "dueDate": "2025-06-20", "source": "text" },
+    { "title": "Коллоквиум по микро",   "dueDate": "2025-04-18", "source": "text" }
+  ]
+}
+```
+
+---
+
+### `POST /api/quiz/generate`
+
+Генерация тестовых вопросов по тексту.
+
+**Запрос:**
+```json
+{
+  "text": "Теория игр изучает стратегическое взаимодействие...",
+  "count": 5,
+  "type": "mcq"
+}
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "questions": [
+    {
+      "question": "Что изучает теория игр?",
+      "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
+      "correct": "B"
+    }
+  ]
+}
+```
+
+---
+
+### `POST /api/cheatsheet/generate`
+
+Генерация плотной шпаргалки по тексту.
+
+**Запрос:**
+```json
+{ "text": "...", "maxLength": 500 }
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "cheatsheet": "**Теория игр**\n• Доминирующая стратегия: ...\n• Равновесие Нэша: ..."
+}
+```
+
+---
+
+### `POST /api/planner/build`
+
+Составление учебного плана.
+
+**Запрос:**
+```json
+{
+  "topic": "Подготовка к экзамену по макроэкономике",
+  "daysAvailable": 14,
+  "hoursPerDay": 3
+}
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "plan": [
+    { "day": 1, "topic": "Национальный доход и ВВП", "tasks": ["..."] }
+  ]
+}
+```
+
+---
+
+### `POST /api/lecture-notes`
+
+Генерация структурированного конспекта по транскрипту аудио.
+
+**Запрос:**
+```json
+{
+  "transcript": "Сегодня мы рассмотрим модель IS-LM..."
+}
+```
+
+**Ответ:**
+```json
+{
+  "ok": true,
+  "notes": {
+    "title": "Модель IS-LM",
+    "summary": "...",
+    "keyPoints": ["...", "..."],
+    "definitions": [{ "term": "IS-кривая", "definition": "..." }],
+    "actionItems": ["Прочитать главу 8", "..."]
+  }
 }
 ```
 
 ---
 
 ### `POST /api/transcribe`
-Транскрипция аудио (scaffold).
 
-**Request**
+Транскрипция аудиофайла через OpenAI Whisper.
+
+**Запрос:** `multipart/form-data`
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `audio` | File | MP3, WAV, OGG, WebM, M4A |
+| `language` | string | Опционально, ISO 639-1, например `ru` |
+
+**Ответ:**
 ```json
-{
-  "audioUrl": "https://...",
-  "documentId": "uuid"
-}
+{ "ok": true, "transcript": "Текст лекции..." }
 ```
-
-Нужно передать хотя бы одно поле: `audioUrl` или `documentId`.
 
 ---
 
-### `POST /api/chat`
-Диалоговый интерфейс поверх оркестратора.
+### `POST /api/transcribe/microphone`
 
-### `POST /api/letters/generate`
-Прямой вызов `letter_generator`.
+Транскрипция записи с микрофона браузера (Blob от MediaRecorder).
 
-### `POST /api/tasks/extract`
-Прямой вызов `task_extractor`.
+**Запрос:** `multipart/form-data`
 
-### `POST /api/planner/build`
-Прямой вызов `study_plan`.
+| Поле | Тип | Описание |
+|---|---|---|
+| `audio` | Blob | WebM или OGG от MediaRecorder |
 
-### `POST /api/cheatsheet/generate`
-Прямой вызов `cheat_sheet`.
-
-### `POST /api/quiz/generate`
-Прямой вызов `quiz_generator`.
-
-`questionCount` — optional, integer от 1 до 50.
-
-### `POST /api/analytics/event`
-Логирование продуктового события.
+**Ответ:**
+```json
+{ "ok": true, "transcript": "Что ты сказал..." }
+```
 
 ---
 
 ### `POST /api/telegram/webhook`
-- Не использует Supabase auth.
-- Проверяет заголовок `x-telegram-bot-api-secret-token`.
-- При успешной верификации отвечает `200 { "ok": true }`.
 
-> Важно: Telegram ожидает быстрый `200 OK`; бизнес-обработка update не должна ломать ack-механику.
+Обрабатывает входящие обновления Telegram Bot. Аутентификация по JWT не требуется.
+
+**Безопасность:** `X-Telegram-Bot-Api-Secret-Token: <TELEGRAM_WEBHOOK_SECRET>` — возвращает 403, если отсутствует или неверный.
+
+**Запрос:** объект Telegram `Update` (JSON)
+
+**Ответ:** всегда `{ ok: true }` — даже при ошибке (предотвращение повторных попыток Telegram).
+
+Поддерживаемые типы обновлений:
+- `message.text` — маршрутизируется через оркестратор
+- `message.voice` — скачивается → Whisper → оркестратор
+- `message.document` + caption — загружается + caption как запрос
 
 ---
 
-## Open questions / Assumptions
+### `POST /api/analytics/event`
 
-1. Контракты прямых workflow endpoint'ов пока считаются временными, т.к. сервисы в основном stub.
-2. Для `/api/upload` задокументирован текущий JSON-scaffold, а не финальный multipart API.
-3. Поведение `/api/chat` и `/api/transcribe` будет уточняться после фактического подключения OpenAI/Whisper логики.
+Запись события продуктовой воронки.
+
+**Запрос:**
+```json
+{
+  "event": "document_uploaded",
+  "properties": { "mime_type": "application/pdf", "size_bytes": 204800 }
+}
+```
+
+**Ответ:**
+```json
+{ "ok": true }
+```
+
+---
+
+### `GET /api/health`
+
+Health check. Аутентификация не требуется.
+
+**Ответ:**
+```json
+{ "ok": true, "ts": 1713098400000 }
+```

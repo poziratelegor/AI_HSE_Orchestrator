@@ -1,55 +1,201 @@
-# Architecture
+# Архитектура системы
 
-## Контекст
+## Обзор
 
-Проект — единое Next.js приложение с App Router, где в одном репозитории находятся:
-- UI (marketing + dashboard);
-- API handlers;
-- оркестратор маршрутизации;
-- интеграции (Supabase, OpenAI, Telegram);
-- слой RAG и аналитики.
+StudyFlow AI построен в виде шести горизонтальных слоёв. Каждый слой зависит только от слоёв ниже — импорты вверх по стеку запрещены.
 
-## Архитектурные слои
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Каналы ввода                            │
+│         Веб-приложение (Next.js 15)  │  Telegram-бот            │
+├─────────────────────────────────────────────────────────────────┤
+│                           API-слой                              │
+│   Route Handlers · Проверка auth · Валидация · JSON-ответ      │
+├─────────────────────────────────────────────────────────────────┤
+│                       Движок оркестратора                       │
+│        Классификация намерения → Оценка confidence → Роутинг   │
+├─────────────────────────────────────────────────────────────────┤
+│                        Сервисы воркфлоу                         │
+│   rag_qa · letter · tasks · lecture · plan · quiz · explain    │
+├─────────────────────────────────────────────────────────────────┤
+│                         Знания / RAG                            │
+│         Chunk  ·  Embed  ·  Retrieve  ·  Expand  ·  Cite       │
+├─────────────────────────────────────────────────────────────────┤
+│                      Данные и интеграции                        │
+│     Supabase · pgvector · OpenAI · Telegram · Redis · Sentry   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-1. **Interface layer** (`app/*`, `components/*`)
-   - страницы и UI-обвязка;
-   - входные каналы: Web + Telegram webhook.
+---
 
-2. **API layer** (`app/api/*`)
-   - валидация входа;
-   - auth-check (кроме Telegram webhook);
-   - вызов оркестратора/сервиса;
-   - унифицированный формат ошибок.
+## Компонентная диаграмма
 
-3. **Orchestrator layer** (`lib/orchestrator/*`)
-   - классификация intent;
-   - выбор workflow;
-   - fallback-поведение при низкой уверенности/ошибках.
+```mermaid
+graph TB
+    subgraph Client["Каналы ввода"]
+        WEB["🌐 Веб-приложение\n/dashboard"]
+        TG["✈️ Telegram-бот"]
+    end
 
-4. **Workflow service layer** (`lib/services/*`)
-   - бизнес-сценарии (письма, задачи, quiz, explain, и т.д.);
-   - сейчас в основном stub-реализации.
+    subgraph APILayer["API-слой — app/api/"]
+        ORCH_API["orchestrate/route.ts"]
+        UPLOAD_API["upload/route.ts\nМИМЕ + проверка magic-bytes"]
+        RAG_API["rag/query/route.ts\nСначала Redis-кэш"]
+        TG_API["telegram/webhook/route.ts\nПроверка secret-заголовка"]
+        MISC_API["letters · tasks · quiz\nplanner · transcribe · chat"]
+    end
 
-5. **Knowledge layer (RAG)** (`lib/rag/*`, `app/api/upload`, `app/api/rag/query`)
-   - подготовка документов (chunking / embeddings / retrieval / citations);
-   - текущая реализация частичная.
+    subgraph OrchestratorLayer["Оркестратор — lib/orchestrator/"]
+        ROUTER["router.ts\norchestrate()"]
+        CLASSIFY["classify.ts\nclassifyIntent()"]
+        LLM_C["classify-llm.ts\nGPT-4o · json_object\nтаймаут 8 с"]
+        KW_C["Сканирование ключевых слов реестра"]
+        POLICIES["policies.ts\nвыполнить ≥ 0.75\nрекомендовать ≥ 0.45"]
+        EXECUTOR["executor.ts\nexecuteWorkflow()"]
+        REGISTRY["registry.ts\n9 определений воркфлоу"]
+        LOGGER["logger.ts\nlogOrchestratorRun()"]
+        FALLBACK["fallback.ts"]
+    end
 
-6. **Data & integration layer** (`lib/supabase/*`, `supabase/*`, `lib/ai/*`, `lib/telegram/*`, `lib/analytics/*`)
-   - хранилище данных, внешние API и телеметрия.
+    subgraph ServicesLayer["Сервисы — lib/services/"]
+        RAG_SVC["content/rag-qa.ts"]
+        LETTER_SVC["communication/letters.ts"]
+        TASKS_SVC["planning/tasks.ts"]
+        LECTURE_SVC["content/lecture-insight.ts"]
+        OTHER_SVC["quiz · cheatsheet · explain · planner"]
+        INGEST["documents/ingestion.ts\nPDF/аудио → chunk → embed"]
+        TRANSCRIBE["documents/transcribe.ts\nWhisper STT"]
+    end
 
-## Ключевые инварианты
+    subgraph RAGLayer["RAG-пайплайн — lib/rag/"]
+        CHUNK["chunk.ts\nпо предложениям, 800 токенов"]
+        EMBED["embed.ts\ntext-embedding-3-small\nбатч + retry"]
+        RETRIEVE["retrieve.ts\nRPC match_document_chunks"]
+        EXPAND["expand-query.ts\n3 перефразировки от LLM"]
+        CITE["citations.ts\nвыдержка 200 символов"]
+    end
 
-- **Single entry point для маршрутизации**: новые пользовательские задачи должны проходить через оркестратор.
-- **Registry-first расширяемость**: добавление workflow через `lib/orchestrator/registry.ts`, без разрастания `switch/case`.
-- **Fail-safe поведение**: проблемы классификатора/сервиса не должны приводить к падению всего запроса.
-- **Асинхронность длинных задач**: ingestion и тяжёлые RAG-операции не должны блокировать request-response цикл.
-- **Server-only secrets**: секретные ключи не попадают в client bundle.
+    subgraph AILayer["AI — lib/ai/"]
+        AI_CLIENT["client.ts\nмульти-провайдерная фабрика"]
+        RETRY["retry.ts\nэкспоненциальный backoff"]
+        TOKEN_GUARD["token-guard.ts\nguardContext()"]
+    end
 
-## Состояние реализации (архитектурные риски)
+    subgraph Infra["Инфраструктура"]
+        SUPABASE[("Supabase\nPostgreSQL + pgvector")]
+        OPENAI["OpenAI\nGPT-4o-mini · Whisper"]
+        REDIS[("Upstash Redis\nREST, без SDK")]
+        SENTRY["Sentry"]
+    end
 
-- Реестр и rules-based классификация уже работают.
-- Значимая часть сервисов остаётся на уровне scaffold.
-- RLS-политики не завершены.
-- Telegram webhook подтверждает входящий вызов, но не обрабатывает апдейты в глубину.
+    WEB --> ORCH_API & UPLOAD_API & RAG_API
+    TG --> TG_API
 
-Эти пункты важны для планирования ближайших задач и релизных ограничений.
+    ORCH_API --> ROUTER
+    ROUTER --> CLASSIFY
+    CLASSIFY --> LLM_C & KW_C
+    CLASSIFY --> POLICIES
+    POLICIES --> EXECUTOR & FALLBACK
+    EXECUTOR --> REGISTRY
+    REGISTRY --> RAG_SVC & LETTER_SVC & TASKS_SVC & LECTURE_SVC & OTHER_SVC
+    ROUTER --> LOGGER
+
+    RAG_SVC --> EXPAND --> EMBED --> RETRIEVE
+    RETRIEVE --> CITE
+    INGEST --> CHUNK --> EMBED
+    TRANSCRIBE --> OPENAI
+    UPLOAD_API --> INGEST
+
+    RAG_API --> REDIS
+    RAG_API --> RAG_SVC
+
+    ServicesLayer --> AI_CLIENT
+    AI_CLIENT --> RETRY
+    RAG_SVC --> TOKEN_GUARD
+
+    AI_CLIENT --> OPENAI
+    RETRIEVE --> SUPABASE
+    EMBED --> OPENAI
+    LOGGER --> SUPABASE
+    MISC_API --> SUPABASE
+    APILayer --> REDIS
+    APILayer --> SENTRY
+```
+
+---
+
+## Жизненный цикл запроса
+
+```
+1. Пользователь отправляет текст через веб или Telegram
+2. Route handler проверяет auth (Bearer JWT) и форму входных данных
+3. Вызывается orchestrate(input) в router.ts
+4. LLM-классификатор и сканер ключевых слов запускаются параллельно (таймаут 8 с)
+5. Победитель выбирается по confidence — LLM побеждает при ≥ 0.75
+6. Confidence проверяется по порогам (policies.ts):
+   ≥ 0.75    → executeWorkflow()
+   0.45–0.74 → вернуть needsClarification = true
+   < 0.45    → buildFallbackResponse()
+7. logOrchestratorRun() пишется в analytics_events (async, не блокирует)
+8. Возвращается JSON: { ok, workflow, intent, confidence, result }
+```
+
+---
+
+## Карта файлов оркестратора
+
+| Файл | Ответственность | Ключевой экспорт |
+|---|---|---|
+| `registry.ts` | Единственный источник истины для всех воркфлоу | `WORKFLOW_REGISTRY` |
+| `classify.ts` | Запускает LLM + ключевые слова параллельно, выбирает победителя | `classifyIntent()` |
+| `classify-llm.ts` | Классификация через GPT-4o, json_object, таймаут 8 с | `classifyLLM()` |
+| `router.ts` | Собирает полный пайплайн | `orchestrate()` |
+| `executor.ts` | Вызывает `workflow.run(text, ctx)` | `executeWorkflow()` |
+| `policies.ts` | Пороги confidence | `ORCHESTRATOR_THRESHOLDS` |
+| `fallback.ts` | Ответ при слишком низком confidence | `buildFallbackResponse()` |
+| `logger.ts` | Асинхронная запись в analytics_events | `logOrchestratorRun()` |
+
+**Правило:** добавление нового воркфлоу = правки только в `registry.ts`.
+
+---
+
+## Архитектурные инварианты
+
+| № | Правило |
+|---|---|
+| 1 | Новый воркфлоу → одна запись в `registry.ts`, больше ничего |
+| 2 | Бизнес-логика только в `lib/services/*` — route handlers — тонкие обёртки |
+| 3 | Серверные секреты никогда не попадают в клиентский бандл |
+| 4 | Сервисы без HTTP-зависимости — работают из route, вебхука и CLI одинаково |
+| 5 | Telegram-вебхук всегда возвращает 200 OK, даже при ошибке |
+| 6 | `/api/upload` отвечает за <500 мс; обработка запускается в фоне |
+| 7 | `service_role` клиент — только в фоновых задачах, не в пути пользовательского запроса |
+
+---
+
+## Заголовки безопасности
+
+Применяются ко всем маршрутам через `next.config.ts`:
+
+| Заголовок | Значение |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `X-XSS-Protection` | `1; mode=block` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Permissions-Policy` | `camera=(), microphone=(self), geolocation=()` |
+| `Content-Security-Policy` | Строгий allowlist — см. `next.config.ts` |
+
+---
+
+## Нефункциональные требования
+
+| Метрика | Цель |
+|---|---|
+| P95 латентность оркестратора | ≤ 5 с |
+| Время ответа на загрузку | ≤ 2 с |
+| P95 RAG-запрос | ≤ 6 с |
+| ACK Telegram-вебхука | ≤ 200 мс |
+| Обработка документа | ≤ 60 с |
+| Максимальный размер файла | 20 МБ |
+| Uptime | 99.5% |

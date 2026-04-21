@@ -1,5 +1,6 @@
 import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
 import { withRetry } from "@/lib/ai/retry";
+import { buildClassifyPrompt } from "@/lib/ai/prompts";
 import type { ClassificationResult } from "@/lib/orchestrator/classify";
 import { WORKFLOW_REGISTRY } from "@/lib/orchestrator/registry";
 
@@ -34,25 +35,9 @@ function buildWorkflowDescriptions(): string {
     .join("\n");
 }
 
-const CLASSIFY_SYSTEM_PROMPT = `
-Ты — интеллектуальный маршрутизатор StudyFlow AI для студентов.
-Твоя задача: определить, какой workflow нужен для обработки запроса студента.
-
-ДОСТУПНЫЕ WORKFLOWS:
-${buildWorkflowDescriptions()}
-
-ПРАВИЛА:
-- Верни ТОЛЬКО JSON объект без пояснений и markdown
-- confidence: число от 0.0 до 1.0 (насколько ты уверен в выборе)
-- Если запрос явно соответствует workflow — confidence >= 0.85
-- Если есть сомнения между двумя вариантами — confidence 0.5–0.74
-- Если запрос неясен или не относится ни к чему — используй route_recommender, confidence < 0.45
-- needs_clarification: true только если НЕВОЗМОЖНО выбрать workflow без дополнительной информации
-- clarification_question: вопрос студенту (только если needs_clarification = true)
-
-ФОРМАТ ОТВЕТА:
-{"intent":"workflow_name","confidence":0.9,"reason":"краткое объяснение выбора","needs_clarification":false,"clarification_question":null}
-`.trim();
+// Build the classify prompt once at module load — it's static after build.
+// Few-shot examples + JSON schema are embedded by buildClassifyPrompt().
+const CLASSIFY_SYSTEM_PROMPT = buildClassifyPrompt(buildWorkflowDescriptions());
 
 /**
  * Classifies user intent using GPT.

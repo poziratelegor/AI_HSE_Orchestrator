@@ -9,10 +9,12 @@ export async function POST(request: Request) {
   // Инвариант: ВСЕГДА отвечать 200 OK при успешной верификации — даже если обработка упала.
   // Иначе Telegram будет бесконечно ретраить запрос.
 
-  const secret = request.headers.get("x-telegram-bot-api-secret-token");
-
-  if (secret !== process.env.TELEGRAM_WEBHOOK_SECRET) {
-    return ERRORS.UNAUTHORIZED();
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (secret) {
+    const incoming = request.headers.get("x-telegram-bot-api-secret-token");
+    if (incoming !== secret) {
+      return NextResponse.json({ ok: false }, { status: 403 });
+    }
   }
 
   let update: unknown = null;

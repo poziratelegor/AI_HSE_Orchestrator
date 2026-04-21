@@ -1,11 +1,7 @@
-import { getOpenAIClient } from "@/lib/ai/client";
+import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
+import { withRetry } from "@/lib/ai/retry";
+import { buildLectureInsightPrompt } from "@/lib/ai/prompts";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
-
-const SYSTEM_PROMPT = `
-Ты — учебный ассистент. Получаешь текст лекции. Возвращай ТОЛЬКО JSON:
-{"topics":["тема1","тема2"],"terms":[{"term":"...","definition":"..."}],
- "key_ideas":["идея1","идея2"],"summary":"краткое резюме 3-5 предложений"}
-`.trim();
 
 type LectureInsightResult =
   | {
@@ -30,17 +26,19 @@ export async function runLectureInsight(
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const completion = await openai.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL ?? "gpt-4o",
-        temperature: 0.3,
-        max_tokens: 2000,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Проанализируй следующий текст лекции:\n\n${text}` }
-        ]
-      },
-      { signal: controller.signal }
+    const completion = await withRetry(() =>
+      openai.chat.completions.create(
+        {
+          model: DEFAULT_MODEL,
+          temperature: 0.3,
+          max_tokens: 2500,
+          messages: [
+            { role: "system", content: buildLectureInsightPrompt() },
+            { role: "user", content: `Проанализируй следующий текст лекции:\n\n${text}` }
+          ]
+        },
+        { signal: controller.signal }
+      )
     );
 
     clearTimeout(timeout);
@@ -71,11 +69,12 @@ export async function runLectureInsight(
         data: { topics, terms, key_ideas, summary }
       };
     } catch {
+      // Graceful degradation: return raw LLM text as the summary
       return {
-        ok: false,
+        ok: true,
         workflow: "lecture_insight",
-        error: "parse_error",
-        message: "Не удалось разобрать ответ модели как JSON."
+        summary: "Анализ лекции",
+        data: { topics: [], terms: [], key_ideas: [], summary: raw }
       };
     }
   } catch (err: unknown) {

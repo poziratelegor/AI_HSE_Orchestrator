@@ -29,6 +29,11 @@ export async function POST(request: Request) {
     return ERRORS.INVALID_INPUT("Поле 'text' обязательно и должно быть непустой строкой.");
   }
 
+  const MAX_INPUT_LENGTH = 50_000;
+  if ((text as string).length > MAX_INPUT_LENGTH) {
+    return ERRORS.INVALID_INPUT(`Текст слишком длинный (максимум ${MAX_INPUT_LENGTH} символов).`);
+  }
+
   if (channel !== undefined && channel !== "web" && channel !== "telegram") {
     return ERRORS.INVALID_INPUT("Поле 'channel' должно быть 'web' или 'telegram'.");
   }

@@ -42,8 +42,8 @@ export function guardContext(
   const budget =
     (MODEL_TOKEN_BUDGETS[model] ?? DEFAULT_BUDGET) -
     RESERVED_TOKENS -
-    estimateTokens(systemPromptLength.toString()) -
-    estimateTokens(questionLength.toString());
+    Math.ceil(systemPromptLength / CHARS_PER_TOKEN) -
+    Math.ceil(questionLength / CHARS_PER_TOKEN);
 
   let used = 0;
   const result: RetrievedChunk[] = [];

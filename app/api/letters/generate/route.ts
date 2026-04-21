@@ -22,6 +22,11 @@ export async function POST(request: Request) {
   }
 
   // 3. Вызов сервиса
-  const result = await runLetterGenerator(text.trim(), { userId: user?.id });
-  return NextResponse.json(result);
+  try {
+    const result = await runLetterGenerator(text.trim(), { userId: user?.id });
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error("[api/letters/generate] service error:", err);
+    return ERRORS.INTERNAL("Не удалось сгенерировать письмо.");
+  }
 }

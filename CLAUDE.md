@@ -12,7 +12,7 @@
 
 Два канала: веб-интерфейс (Next.js) и Telegram-бот.
 
-**Полный продуктовый контекст:** `product.md` — читай его если нужен контекст о целях, NFR, жизненном цикле запроса, или n8n-стратегии.
+**Полный продуктовый контекст:** `docs/product.md` — читай его если нужен контекст о целях, NFR, жизненном цикле запроса, или n8n-стратегии.
 
 ---
 
@@ -21,19 +21,21 @@
 | Слой | Файлы | Статус |
 |------|-------|--------|
 | Оркестратор (routing, classify, registry) | `lib/orchestrator/*` | ✅ LLM-first + keyword fallback |
-| Сервисы (бизнес-логика workflow) | `lib/services/*` | ✅ rag_qa, letters, tasks реализованы; остальные — частично |
-| RAG pipeline | `lib/rag/*` | ✅ полностью реализован (embed, retrieve, chunk, expand-query, citations) |
-| OpenAI интеграция | `lib/ai/*` | ✅ работает (client, retry, token-guard, prompts, schemas) |
-| Supabase клиент | `lib/supabase/*` | ✅ работает |
-| Telegram | `lib/telegram/*` | ✅ реализован (text + voice via Whisper + document caption) |
-| Аналитика | `lib/analytics/*` | ✅ trackEvent реализован; funnel/metrics — заглушки |
+| Сервисы (бизнес-логика workflow) | `lib/services/*` | ✅ все 9 workflow реализованы (rag_qa, letters, tasks, study_plan, lecture_insight, explain, cheatsheet, quiz, route_recommender) |
+| RAG pipeline | `lib/rag/*` | ✅ embed, retrieve, chunk, expand-query, citations + streaming через `/api/rag/query/stream` |
+| OpenAI интеграция | `lib/ai/*` | ✅ client, retry, token-guard, prompts, schemas, student-context |
+| Supabase клиент | `lib/supabase/*` | ✅ browser + server clients, middleware |
+| Telegram | `lib/telegram/*` | ✅ text + voice (Whisper STT) + document caption + FSM |
+| Аналитика | `lib/analytics/*` | ✅ trackEvent + полная реализация metrics (overview/scenario/funnel) |
 | Интеграции | `lib/integrations/*` | ✅ YouTube, SmartLMS (Moodle HSE), iCal |
-| Repository layer | `lib/repository/*` | ✅ auth, documents, letters, tasks |
-| Document ingestion | `lib/services/documents/*` | ✅ PDF/audio → chunk → embed → pgvector |
-| Route handlers | `app/api/*` | ✅ реализованы; добавлены integrations и document status |
-| UI | `components/*`, `app/dashboard/*` | ⚙️ структура без реализации |
-| БД миграция | `supabase/migrations/0001_init.sql` | ✅ готово |
-| RLS политики | `supabase/policies.sql` | ⚙️ нужна проверка и применение |
+| Repository layer | `lib/repository/*` | ✅ auth, documents, letters, tasks (CRUD + updateTaskStatus) |
+| Document ingestion | `lib/services/documents/*` | ✅ PDF/audio/text → chunk → embed → pgvector + dedup по content_hash |
+| Route handlers | `app/api/*` | ✅ orchestrate, upload, rag/query (+ /stream), telegram, transcribe, analytics, documents, integrations, tasks/[id]/status, letters |
+| UI | `components/*`, `app/dashboard/*` | ✅ HSE design system, Kanban, RAG streaming, citations, фильтры, пагинация |
+| БД миграции | `supabase/migrations/0001-0006_*.sql` | ✅ применены, pgvector + HNSW индексы, RLS включён |
+| RLS политики | `supabase/policies.sql` + `0004_sync_schema.sql` | ✅ применены ко всем пользовательским таблицам |
+| Docker | `Dockerfile`, `docker-compose.yml` | ✅ multi-stage standalone + cloudflared (quick + named) |
+| Скрипты | `scripts/*` | ✅ seed, ingest-documents, backfill-analytics, telegram:webhook, grant-admin |
 
 **Важно:** классификатор использует **LLM-first стратегию** (`classify-llm.ts`) с timeout 8s и keyword fallback.
 Модель по умолчанию: `gpt-4o-mini` (override через env `OPENAI_MODEL`).
@@ -166,8 +168,8 @@ lib/supabase/
 
 lib/analytics/
   events.ts         ← trackEvent() ✅ — insert в analytics_events
-  funnel.ts         ← funnel tracking — заглушка
-  metrics.ts        ← metrics queries — заглушка
+  funnel.ts         ← FUNNEL_STEPS константы (landing → signup → first_query → first_workflow → repeat)
+  metrics.ts        ← getOverviewMetrics, getScenarioBreakdown, getFunnelData ✅
 
 lib/telegram/
   bot.ts            ← Telegram API helpers
@@ -181,14 +183,23 @@ app/api/
   orchestrate/route.ts              ← POST /api/orchestrate
   upload/route.ts                   ← POST /api/upload
   rag/query/route.ts                ← POST /api/rag/query
+  rag/query/stream/route.ts         ← POST /api/rag/query/stream (NDJSON streaming)
   telegram/webhook/route.ts         ← POST /api/telegram/webhook
   transcribe/route.ts               ← POST /api/transcribe
   analytics/event/route.ts          ← POST /api/analytics/event
   documents/[id]/status/route.ts    ← GET  /api/documents/:id/status
+  tasks/[id]/status/route.ts        ← PATCH /api/tasks/:id/status (Kanban drag-and-drop)
   integrations/youtube/route.ts     ← POST /api/integrations/youtube
   integrations/smartlms/sync/route.ts ← POST /api/integrations/smartlms/sync
   integrations/ical/import/route.ts ← POST /api/integrations/ical/import
-  (+ letters, tasks, planner, cheatsheet, quiz, chat)
+  (+ letters, tasks, planner, cheatsheet, quiz, chat, health)
+
+scripts/
+  seed.ts                ← USER_EMAIL=... npm run seed — демо-данные (профиль, задачи, письма, runs)
+  ingest-documents.ts    ← USER_EMAIL=... npm run ingest <path> — batch RAG ingestion
+  backfill-analytics.ts  ← npm run analytics:backfill — нормализация старых событий + сводка
+  setup-telegram-webhook.ts ← TELEGRAM_BOT_TOKEN=... APP_URL=... npm run telegram:webhook
+  grant-admin.ts         ← USER_EMAIL=... npm run grant-admin — выдать роль admin
 ```
 
 ---
@@ -208,17 +219,25 @@ npm run lint
 # Сборка (проверка перед деплоем)
 npm run build
 
-# Telegram tunnel для локальной разработки
-cloudflared tunnel --url http://localhost:3000
+# Docker (полный стек)
+docker compose up -d --build       # web на :3000
+docker compose --profile bot up -d # + cloudflared quick tunnel
+docker compose --profile bot-named up -d  # + cloudflared named tunnel (нужен CLOUDFLARE_TUNNEL_TOKEN)
+
+# Telegram webhook (после поднятия туннеля)
+TELEGRAM_BOT_TOKEN=... APP_URL=https://... npm run telegram:webhook
 
 # Применить миграцию БД (если есть Supabase CLI)
 npx supabase db push
 
-# Seed данных
-npx tsx scripts/seed.ts
+# Seed демо-данных
+USER_EMAIL=you@hse.ru npm run seed
 
-# Ingest документов (скрипт)
-npx tsx scripts/ingest-documents.ts
+# RAG ingestion (PDF/TXT/MD из локальной папки)
+USER_EMAIL=you@hse.ru npm run ingest ./materials/
+
+# Аналитика: нормализация + сводка
+npm run analytics:backfill
 ```
 
 ---
@@ -346,7 +365,7 @@ type DocumentProcessingStatus = "pending" | "processing" | "ready" | "failed" | 
 | Схема БД | `supabase/migrations/0001_init.sql` |
 | RLS политики | `supabase/policies.sql` |
 | API контракты | `docs/api.md` |
-| Env vars с описанием | `product.md` → секция 13 |
+| Env vars с описанием | `docs/product.md` → секция 13 |
 
 ---
 
@@ -354,7 +373,7 @@ type DocumentProcessingStatus = "pending" | "processing" | "ready" | "failed" | 
 
 | Файл | Когда читать |
 |------|-------------|
-| `product.md` | Всегда первым — продукт, NFR, lifecycle |
+| `docs/product.md` | Всегда первым — продукт, NFR, lifecycle |
 | `docs/architecture.md` | При изменении слоёв системы |
 | `docs/orchestrator.md` | При работе с оркестратором |
 | `docs/database.md` | При работе со схемой БД |

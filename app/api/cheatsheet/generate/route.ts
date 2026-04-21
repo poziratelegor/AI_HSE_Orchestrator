@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { runCheatSheet } from "@/lib/services/content/cheatsheet";
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -22,12 +23,12 @@ export async function POST(request: Request) {
   }
 
   // 3. Вызов сервиса
-  // TODO: вызвать runCheatSheet() из lib/services/cheatsheet.ts
-  return NextResponse.json({
-    ok: true,
-    workflow: "cheat_sheet",
-    cheatSheet: null,
-    message: "Cheat sheet generator не реализован."
-  });
+  try {
+    const result = await runCheatSheet(text as string);
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error("[api/cheatsheet/generate] service error:", err);
+    return ERRORS.INTERNAL("Не удалось создать шпаргалку.");
+  }
 }
 

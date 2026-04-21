@@ -1,17 +1,7 @@
-import { getOpenAIClient } from "@/lib/ai/client";
+import { getOpenAIClient, DEFAULT_MODEL } from "@/lib/ai/client";
+import { withRetry } from "@/lib/ai/retry";
+import { buildQuizPrompt } from "@/lib/ai/prompts";
 import type { WorkflowContext } from "@/lib/orchestrator/executor";
-
-function buildSystemPrompt(count: number): string {
-  return `
-Создай тест для самопроверки. Возвращай ТОЛЬКО JSON:
-{"questions":[
-  {"question":"...","options":["A)...","B)...","C)...","D)..."],
-   "correct":"A","explanation":"почему правильно"}
-]}
-Количество вопросов: ${count}.
-Вопросы разного уровня сложности.
-`.trim();
-}
 
 /** Parse question count from text like "5 вопросов", "10 questions", "3 вопроса". */
 function parseQuestionCount(text: string): number {
@@ -49,17 +39,19 @@ export async function runQuizGenerator(
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const completion = await openai.chat.completions.create(
-      {
-        model: process.env.OPENAI_MODEL ?? "gpt-4o",
-        temperature: 0.4,
-        max_tokens: 2000,
-        messages: [
-          { role: "system", content: buildSystemPrompt(questionCount) },
-          { role: "user", content: `Составь тест по следующему материалу:\n\n${text}` }
-        ]
-      },
-      { signal: controller.signal }
+    const completion = await withRetry(() =>
+      openai.chat.completions.create(
+        {
+          model: DEFAULT_MODEL,
+          temperature: 0.4,
+          max_tokens: 2500,
+          messages: [
+            { role: "system", content: buildQuizPrompt(questionCount) },
+            { role: "user", content: `Составь тест по следующему материалу:\n\n${text}` }
+          ]
+        },
+        { signal: controller.signal }
+      )
     );
 
     clearTimeout(timeout);
@@ -81,11 +73,15 @@ export async function runQuizGenerator(
         data: { questions, count: questions.length }
       };
     } catch {
+      // Graceful degradation: return raw text as a single free-form question
       return {
-        ok: false,
+        ok: true,
         workflow: "quiz_generator",
-        error: "parse_error",
-        message: "Не удалось разобрать ответ модели как JSON."
+        summary: "Тест (свободная форма)",
+        data: {
+          questions: [{ question: raw, options: [], correct: "", explanation: "" }],
+          count: 1
+        }
       };
     }
   } catch (err: unknown) {

@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ActionButton, EmptyState, InlineAlert, SectionCard, Spinner, StatusBadge } from "@/components/dashboard/ui";
+import { SendEmailModal } from "@/components/letters/SendEmailModal";
 import type { LetterRow } from "@/lib/repository/letters";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { toast } from "@/lib/toast";
 
 const RECIPIENT_LABEL: Record<string, string> = {
   teacher: "Преподаватель",
@@ -37,7 +39,106 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
   const [error, setError] = useState<string | null>(loadError);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefreshing, startRefresh] = useTransition();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editedBody, setEditedBody] = useState("");
+  const [editedSubject, setEditedSubject] = useState("");
+  const [sendModalLetter, setSendModalLetter] = useState<LetterRow | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const router = useRouter();
+
+  const copyLetter = async (letter: LetterRow) => {
+    const parts: string[] = [];
+    if (letter.subject) parts.push(`Тема: ${letter.subject}`);
+    if (letter.body) parts.push(letter.body);
+    const txt = parts.join("\n\n");
+    try {
+      await navigator.clipboard.writeText(txt);
+      setCopiedId(letter.id);
+      toast.success("Скопировано");
+      setTimeout(() => setCopiedId((cur) => (cur === letter.id ? null : cur)), 1500);
+    } catch {
+      toast.error("Не удалось скопировать");
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setError("Нет доступа к микрофону. Разрешите доступ в настройках браузера.");
+      return;
+    }
+    const recorder = new MediaRecorder(stream);
+    chunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      setIsTranscribing(true);
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        const form = new FormData();
+        form.append("audio", blob, "recording.webm");
+        const res = await fetch("/api/transcribe/microphone", {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: form,
+        });
+        const data = (await res.json()) as { ok: boolean; transcript?: string; message?: string };
+        if (data.ok && data.transcript) {
+          setText((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript!));
+          toast.success("Речь распознана");
+        } else {
+          setError(data.message ?? "Не удалось распознать речь.");
+        }
+      } catch {
+        setError("Ошибка отправки аудио.");
+      } finally {
+        setIsTranscribing(false);
+      }
+    };
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+    setIsRecording(true);
+  };
+
+  const startEditing = (letter: LetterRow) => {
+    setEditingId(letter.id);
+    setEditedBody(letter.body || "");
+    setEditedSubject(letter.subject || "");
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditedBody("");
+    setEditedSubject("");
+  };
+
+  const saveEditing = () => {
+    if (!editingId) return;
+    setLetters((current) =>
+      current.map((l) =>
+        l.id === editingId ? { ...l, body: editedBody, subject: editedSubject } : l
+      )
+    );
+    setEditingId(null);
+    setEditedBody("");
+    setEditedSubject("");
+  };
 
   const isEmpty = useMemo(() => !error && letters.length === 0, [error, letters.length]);
 
@@ -134,6 +235,36 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
             <div className="flex items-center gap-3">
               <button
                 type="button"
+                onClick={() => void toggleRecording()}
+                disabled={isGenerating || isTranscribing}
+                title={isRecording ? "Остановить запись" : "Записать голос"}
+                className={`flex h-10 w-10 items-center justify-center rounded-xl transition-all duration-150 ${
+                  isRecording
+                    ? "bg-[var(--hse-danger)] text-white animate-pulse"
+                    : "bg-[var(--hse-light)] text-[var(--hse-blue)] hover:bg-[var(--hse-blue)] hover:text-white"
+                } disabled:opacity-40`}
+              >
+                {isTranscribing ? (
+                  <span className="flex gap-0.5">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </span>
+                ) : isRecording ? (
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                    <rect x="2" y="2" width="10" height="10" rx="2" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <rect x="5" y="1.5" width="6" height="8" rx="3" />
+                    <path d="M2.5 7.5a5.5 5.5 0 0 0 11 0" />
+                    <line x1="8" y1="13" x2="8" y2="14.5" />
+                    <line x1="5.5" y1="14.5" x2="10.5" y2="14.5" />
+                  </svg>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => void onGenerate()}
                 disabled={isGenerating || !text.trim()}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--hse-blue)] px-4 py-2 text-sm font-medium text-white transition-all duration-150 hover:bg-[var(--hse-blue-mid)] hover:-translate-y-px active:translate-y-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(55,75,155,0.3)] focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
@@ -194,8 +325,91 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
                       <p className="mt-1 text-xs text-slate-500">{formatDate(letter.created_at)}</p>
                     </button>
                     {isExpanded && (
-                      <div className="mt-3 rounded-lg bg-[var(--hse-page-bg)] p-3 text-sm whitespace-pre-wrap text-slate-700">
-                        {letter.body || "Текст письма отсутствует."}
+                      <div className="mt-3 space-y-3">
+                        {editingId === letter.id ? (
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              value={editedSubject}
+                              onChange={(e) => setEditedSubject(e.target.value)}
+                              className="w-full rounded-lg border border-[var(--hse-border)] bg-white px-3 py-2 text-sm text-slate-900 focus:border-[var(--hse-blue-mid)] focus:outline-none focus:ring-2 focus:ring-[rgba(55,75,155,0.15)]"
+                              placeholder="Тема письма"
+                            />
+                            <textarea
+                              value={editedBody}
+                              onChange={(e) => setEditedBody(e.target.value)}
+                              className="h-48 w-full rounded-lg border border-[var(--hse-border)] bg-white px-3 py-2 text-sm text-slate-700 focus:border-[var(--hse-blue-mid)] focus:outline-none focus:ring-2 focus:ring-[rgba(55,75,155,0.15)]"
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={saveEditing}
+                                className="rounded-xl bg-[var(--hse-blue)] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[var(--hse-blue-mid)]"
+                              >
+                                Сохранить
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelEditing}
+                                className="rounded-xl border border-[var(--hse-border)] bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                              >
+                                Отмена
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="rounded-lg bg-[var(--hse-page-bg)] p-3 text-sm whitespace-pre-wrap text-slate-700">
+                              {letter.body || "Текст письма отсутствует."}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void copyLetter(letter)}
+                                disabled={!letter.body}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {copiedId === letter.id ? (
+                                  <>
+                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="m3 6 2 2 4-4" />
+                                    </svg>
+                                    Готово
+                                  </>
+                                ) : (
+                                  <>
+                                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                                      <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.2" />
+                                      <path d="M2 8.5V2.5A0.5.5 0 0 1 2.5 2H8" />
+                                    </svg>
+                                    Скопировать
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => startEditing(letter)}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--hse-border)] bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-[var(--hse-blue)]/30 hover:bg-[var(--hse-light)]/50"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                                  <path d="M9 2l1.5 1.5L4 10H2v-2L8.5 1.5z" />
+                                </svg>
+                                Редактировать
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSendModalLetter(letter)}
+                                disabled={!letter.body}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--hse-blue)] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[var(--hse-blue-mid)] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M11 1L5.5 6.5M11 1l-3.5 10L5.5 6.5 1 5l10-4z" />
+                                </svg>
+                                Отправить email
+                              </button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </article>
@@ -215,6 +429,22 @@ export default function LettersClient({ initialLetters, loadError = null }: Prop
           </div>
         </SectionCard>
       </div>
+
+      {sendModalLetter && (
+        <SendEmailModal
+          open={!!sendModalLetter}
+          initialSubject={sendModalLetter.subject || ""}
+          body={sendModalLetter.body || ""}
+          onClose={() => setSendModalLetter(null)}
+          onSent={() => {
+            setLetters((current) =>
+              current.map((l) =>
+                l.id === sendModalLetter.id ? { ...l, status: "sent" } : l
+              )
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
