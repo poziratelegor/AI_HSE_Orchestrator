@@ -15,6 +15,7 @@ import { orchestrate } from "@/lib/orchestrator/router";
 import { getOpenAIClient } from "@/lib/ai/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { processDocument } from "@/lib/services/documents/ingestion";
+import { checkRateLimit } from "@/lib/api/rate-limit";
 import {
   sendMessage,
   sendMessageChunks,
@@ -103,6 +104,14 @@ type TelegramUpdate = {
 const MAX_AUDIO_SIZE = 25 * 1024 * 1024; // 25 МБ — лимит Whisper API
 const MAX_DOCUMENT_SIZE = 20 * 1024 * 1024; // 20 МБ — наш лимит на upload
 const WHISPER_TIMEOUT_MS = 60_000;
+const MAX_TEXT_INPUT = 15_000; // символов — защита от DoS токенов LLM
+
+// Rate-limit: одинаковый per chatId для привязанных и непривязанных.
+// 30 сообщений/мин на chat_id — достаточно для нормального пользования,
+// достаточно мало чтобы не слить OpenAI-баланс при абузе.
+const TG_RATE_LIMIT = { limit: 30, windowSeconds: 60, action: "telegram_chat" };
+// Аудио/документы — дорогие, отдельный жёсткий лимит на минуту.
+const TG_HEAVY_RATE_LIMIT = { limit: 5, windowSeconds: 60, action: "telegram_heavy" };
 
 const SUPPORTED_DOC_MIME = new Set([
   "application/pdf",
@@ -146,7 +155,20 @@ const MSG = {
   ].join("\n"),
   LINK_OK: "✅ Аккаунт успешно привязан! Теперь я сохраняю ваши задачи и шлю напоминания о дедлайнах.",
   LINK_NOT_FOUND: "⚠️ Код привязки не найден или уже использован. Сгенерируйте новый в /dashboard/profile.",
-  LINK_EXPIRED: "⚠️ Срок действия кода истёк (код живёт 15 минут). Сгенерируйте новый в профиле.",
+  LINK_EXPIRED: "⚠️ Срок действия кода истёк (код живёт 5 минут). Сгенерируйте новый в профиле.",
+  NEED_LINK: [
+    "🔒 *Доступ только для зарегистрированных пользователей.*",
+    "",
+    "Чтобы пользоваться ассистентом, привяжите аккаунт StudyFlow AI:",
+    "1. Зарегистрируйтесь на сайте (если ещё не сделали)",
+    "2. Откройте *Профиль* → кнопка *«Привязать Telegram»*",
+    "3. Перейдите по полученной ссылке",
+    "",
+    "Команда /link — подробности.",
+  ].join("\n"),
+  RATE_LIMITED: "⚠️ Слишком много сообщений. Подождите минуту и попробуйте ещё раз.",
+  RATE_LIMITED_HEAVY: "⚠️ Слишком много голосовых/файлов за минуту. Подождите и попробуйте снова.",
+  TEXT_TOO_LONG: `⚠️ Слишком длинное сообщение (лимит ${15_000} символов). Разбейте на несколько частей.`,
   PROCESSING: "⏳ Обрабатываю запрос...",
   VOICE_TOO_BIG: "⚠️ Аудио слишком большое (лимит 25 МБ). Попробуйте записать короче.",
   VOICE_DOWNLOAD_FAIL: "⚠️ Не удалось скачать аудио. Попробуйте ещё раз.",
@@ -311,9 +333,18 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   const chatId = message.chat.id;
   const from = message.from;
 
+  // ─── Rate-limit по chat_id (до любой дорогой работы) ─────────────────────
+  const rlKey = `tg:${chatId}`;
+  const rl = await checkRateLimit(rlKey, TG_RATE_LIMIT);
+  if (!rl.allowed) {
+    await sendMessage({ chatId, text: MSG.RATE_LIMITED });
+    return { ok: true };
+  }
+
   if (from) void upsertTelegramUser(from);
 
-  // ─── /start (с возможным deep-link link_<CODE>) ──────────────────────────
+  // ─── PUBLIC команды (доступны без привязки) ──────────────────────────────
+  // /start [link_<CODE>], /help, /link
   if (message.text?.startsWith("/start")) {
     const code = parseStartLinkPayload(message.text);
     if (code && from) {
@@ -345,6 +376,15 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
     return { ok: true };
   }
 
+  // ─── AUTH GATE: всё остальное — только для привязанных ───────────────────
+  // Любой функционал (orchestrate/voice/document) стоит денег (OpenAI) и
+  // имеет смысл только для известного userId. Без привязки — отказ.
+  const userId = from ? await getLinkedUserId(from.id) : undefined;
+  if (!userId) {
+    await sendMessage({ chatId, text: MSG.NEED_LINK, parseMode: "Markdown" });
+    return { ok: true };
+  }
+
   // ─── Фото — пока не поддерживаем ─────────────────────────────────────────
   if (message.photo && message.photo.length > 0 && !message.caption) {
     await sendMessage({ chatId, text: MSG.PHOTO_NOT_SUPPORTED });
@@ -353,9 +393,10 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
 
   // ─── Документ → ingestion в RAG ──────────────────────────────────────────
   if (message.document) {
-    const userId = from ? await getLinkedUserId(from.id) : undefined;
-    if (!userId) {
-      await sendMessage({ chatId, text: MSG.DOC_NEED_LINK });
+    // Дополнительный rate-limit для дорогих операций
+    const rlHeavy = await checkRateLimit(rlKey, TG_HEAVY_RATE_LIMIT);
+    if (!rlHeavy.allowed) {
+      await sendMessage({ chatId, text: MSG.RATE_LIMITED_HEAVY });
       return { ok: true };
     }
     if (message.document.file_size && message.document.file_size > MAX_DOCUMENT_SIZE) {
@@ -386,7 +427,11 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
 
     // Если caption — запускаем orchestrate с ним (например, "найди тут про X")
     if (caption) {
-      await runOrchestrate(caption, chatId, message.message_id, from?.id);
+      if (caption.length > MAX_TEXT_INPUT) {
+        await sendMessage({ chatId, text: MSG.TEXT_TOO_LONG });
+      } else {
+        await runOrchestrate(caption, chatId, message.message_id, userId);
+      }
     }
     return { ok: true };
   }
@@ -394,6 +439,16 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   // ─── Определяем входной текст из voice / audio / video_note / text / caption
   let inputText: string | null = null;
   let transcribedFromAudio = false;
+
+  // Аудио-ветки — дорогие, требуем heavy rate-limit.
+  const hasAudio = !!(message.voice || message.audio || message.video_note);
+  if (hasAudio) {
+    const rlHeavy = await checkRateLimit(rlKey, TG_HEAVY_RATE_LIMIT);
+    if (!rlHeavy.allowed) {
+      await sendMessage({ chatId, text: MSG.RATE_LIMITED_HEAVY });
+      return { ok: true };
+    }
+  }
 
   // 1) Голосовое (PTT)
   if (message.voice) {
@@ -456,6 +511,12 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
     return { ok: true };
   }
 
+  // MAX_LENGTH — защита от DoS токенов
+  if (inputText.length > MAX_TEXT_INPUT) {
+    await sendMessage({ chatId, text: MSG.TEXT_TOO_LONG });
+    return { ok: true };
+  }
+
   // Если транскрибировали — покажем что распозналось
   if (transcribedFromAudio) {
     await sendMessage({
@@ -465,7 +526,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
     });
   }
 
-  await runOrchestrate(inputText.trim(), chatId, message.message_id, from?.id);
+  await runOrchestrate(inputText.trim(), chatId, message.message_id, userId);
   return { ok: true };
 }
 
@@ -475,13 +536,11 @@ async function runOrchestrate(
   text: string,
   chatId: number | string,
   replyToMessageId: number,
-  fromTelegramId?: number
+  userId: string
 ): Promise<void> {
   await sendChatAction(chatId, "typing");
 
   try {
-    const userId = fromTelegramId ? await getLinkedUserId(fromTelegramId) : undefined;
-
     const result = await orchestrate({
       text,
       channel: "telegram",
@@ -489,17 +548,6 @@ async function runOrchestrate(
     });
 
     const formatted = formatOrchestrateResultForTelegram(result);
-
-    // Если задачи извлечены, но аккаунт не привязан — добавим подсказку
-    const needsLinkHint =
-      formatted.workflow === "task_extractor" &&
-      !userId &&
-      !formatted.chunks[0].includes("Сохранено в трекер");
-
-    if (needsLinkHint) {
-      formatted.chunks[formatted.chunks.length - 1] +=
-        "\n\n_💡 Привяжите аккаунт командой /link — задачи будут сохраняться автоматически и я пришлю напоминания о дедлайнах._";
-    }
 
     await sendMessageChunks(chatId, formatted.chunks, {
       parseMode: "Markdown",

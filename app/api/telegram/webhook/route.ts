@@ -9,12 +9,20 @@ export async function POST(request: Request) {
   // Инвариант: ВСЕГДА отвечать 200 OK при успешной верификации — даже если обработка упала.
   // Иначе Telegram будет бесконечно ретраить запрос.
 
+  // Webhook secret ОБЯЗАТЕЛЕН. Если не задан — это misconfiguration, а не
+  // открытый webhook. Без secret любой может POST'ать fake-апдейты с
+  // подделанным from.id и привязать чужой код или слить наш OpenAI-баланс.
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret) {
-    const incoming = request.headers.get("x-telegram-bot-api-secret-token");
-    if (incoming !== secret) {
-      return NextResponse.json({ ok: false }, { status: 403 });
-    }
+  if (!secret || secret.length < 16) {
+    console.error("[telegram/webhook] TELEGRAM_WEBHOOK_SECRET is missing or too short (<16 chars). Rejecting.");
+    return NextResponse.json(
+      { ok: false, error: "webhook_misconfigured" },
+      { status: 500 }
+    );
+  }
+  const incoming = request.headers.get("x-telegram-bot-api-secret-token");
+  if (incoming !== secret) {
+    return NextResponse.json({ ok: false }, { status: 403 });
   }
 
   let update: unknown = null;

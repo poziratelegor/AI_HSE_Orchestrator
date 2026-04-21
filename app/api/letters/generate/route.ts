@@ -2,12 +2,20 @@ import { NextResponse } from "next/server";
 import { runLetterGenerator } from "@/lib/services/communication/letters";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/api/rate-limit";
+
+const MAX_INPUT_LENGTH = 10_000; // символов — письмо не должно быть «лекцией»
 
 export async function POST(request: Request) {
-  // 1. Optional auth
+  // 1. Auth обязателен — сгенерированные письма персонализируются по профилю
   const { user } = await getSupabaseUserFromRequest(request);
+  if (!user) return ERRORS.UNAUTHORIZED();
 
-  // 2. Input validation
+  // 2. Rate-limit
+  const rl = await checkRateLimit(user.id, RATE_LIMITS.orchestrate);
+  if (!rl.allowed) return rl.response;
+
+  // 3. Input validation
   let body: unknown;
   try {
     body = await request.json();
@@ -21,9 +29,13 @@ export async function POST(request: Request) {
     return ERRORS.INVALID_INPUT("Поле 'text' обязательно — опиши суть письма.");
   }
 
-  // 3. Вызов сервиса
+  if (text.length > MAX_INPUT_LENGTH) {
+    return ERRORS.INVALID_INPUT(`Слишком длинный текст (максимум ${MAX_INPUT_LENGTH} символов).`);
+  }
+
+  // 4. Вызов сервиса
   try {
-    const result = await runLetterGenerator(text.trim(), { userId: user?.id });
+    const result = await runLetterGenerator(text.trim(), { userId: user.id });
     return NextResponse.json(result);
   } catch (err) {
     console.error("[api/letters/generate] service error:", err);

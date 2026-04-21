@@ -82,7 +82,7 @@ export function TelegramLinkCard() {
         <div className="mt-5 space-y-3">
           <p className="text-sm text-slate-600">
             Откройте ссылку ниже в Telegram. Код одноразовый, действует
-            <span className="font-semibold"> {expiresMin} мин</span>.
+            <span className="font-semibold"> {expiresMin} мин</span>. Не делитесь ссылкой — кто откроет её первым, тот и привяжется к аккаунту.
           </p>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">

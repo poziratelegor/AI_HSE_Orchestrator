@@ -29,7 +29,9 @@ export async function POST(request: Request) {
     return ERRORS.INVALID_INPUT("Поле 'text' обязательно и должно быть непустой строкой.");
   }
 
-  const MAX_INPUT_LENGTH = 50_000;
+  // 15K символов ≈ 4-5K токенов — больше чем нужно любому учебному
+  // сценарию. Защита от DoS на OpenAI-баланс.
+  const MAX_INPUT_LENGTH = 15_000;
   if ((text as string).length > MAX_INPUT_LENGTH) {
     return ERRORS.INVALID_INPUT(`Текст слишком длинный (максимум ${MAX_INPUT_LENGTH} символов).`);
   }

@@ -9,14 +9,29 @@
  *      `/start link_<code>` → handler вызывает consumeLinkCode(code, tgId)
  *      → ставит telegram_users.user_id, чистит код в profiles.
  *
- * Код живёт 15 минут. Каждый запрос на новый код — перезаписывает старый.
+ * Код живёт 5 минут. Каждый запрос на новый код — перезаписывает старый.
+ * Лимит: не более 3 кодов в час на одного userId (защита от брутфорса).
  */
 
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/api/rate-limit";
 
-const CODE_TTL_MS = 15 * 60 * 1000; // 15 минут
+const CODE_TTL_MS = 5 * 60 * 1000; // 5 минут — узкое окно MITM/screenshot
 const CODE_LENGTH = 8;
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // без 0/O/1/I/L
+
+const LINK_CODE_RATE_LIMIT = {
+  limit: 3,
+  windowSeconds: 60 * 60,
+  action: "telegram_link_code",
+};
+
+export class LinkCodeRateLimitedError extends Error {
+  constructor() {
+    super("Слишком часто запрашиваете код привязки. Попробуйте через час.");
+    this.name = "LinkCodeRateLimitedError";
+  }
+}
 
 function generateCode(): string {
   let s = "";
@@ -41,6 +56,10 @@ export interface LinkCodeResult {
  * Возвращает deep-link, который пользователь откроет в Telegram.
  */
 export async function generateLinkCode(userId: string): Promise<LinkCodeResult> {
+  // Anti-bruteforce: не более 3 кодов в час.
+  const rl = await checkRateLimit(`link:${userId}`, LINK_CODE_RATE_LIMIT);
+  if (!rl.allowed) throw new LinkCodeRateLimitedError();
+
   const supabase = getSupabaseServerClient();
   const code = generateCode();
   const expiresAt = new Date(Date.now() + CODE_TTL_MS).toISOString();
