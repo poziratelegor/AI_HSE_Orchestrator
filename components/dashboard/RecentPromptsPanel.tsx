@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { EmptyState, SectionCard, Spinner, StatusBadge } from "@/components/dashboard/ui";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
-export type RecentPromptStatus = "Готово" | "В обработке" | "Ошибка" | "Уточнение" | "Маршрут";
+export type RecentPromptStatus = "Готово" | "В обработке" | "Ошибка";
 
 export type RecentPrompt = {
   id: string;
