@@ -50,13 +50,6 @@
 
 ## Architecture in 6 bullets
 
-1. Два канала входа: веб-приложение и Telegram-бот.
-2. Все пользовательские запросы проходят через API-слой (`/api/orchestrate`, `/api/upload`, `/api/rag/query`, webhook Telegram).
-3. Оркестратор параллельно запускает LLM-классификацию и keyword-fallback, затем выбирает intent и confidence.
-4. Исполнитель вызывает один из 9 воркфлоу из реестра (`rag_qa`, `letter_generator`, `task_extractor`, и др.).
-5. `rag_qa` и ingestion используют общий RAG-пайплайн: chunk → embeddings → pgvector retrieve → citations.
-6. Инфраструктура: Supabase (PostgreSQL + pgvector), OpenAI (GPT-4o-mini/Whisper), Upstash Redis (кэш и rate limit).
-
 **Подробно: [docs/architecture.md](docs/architecture.md)**.
 
 ---
@@ -77,80 +70,6 @@
 | Мониторинг ошибок | Sentry |
 | Бот | Telegram Bot API |
 | Контейнер | Docker multi-stage build |
-
----
-
-## Быстрый старт
-
-### Docker (рекомендуется)
-
-```bash
-git clone https://github.com/your-org/studyflow-ai
-cd studyflow-ai
-cp .env.example .env.local   # заполнить все ключи
-
-docker compose up --build
-# → http://localhost:3000
-```
-
-### Локальная разработка
-
-```bash
-npm install
-npm run dev    # Turbopack → http://localhost:3000
-```
-
-### Обязательные переменные окружения
-
-```env
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
-SUPABASE_SERVICE_ROLE_KEY=<service role key>   # только сервер, не публиковать
-OPENAI_API_KEY=sk-...                          # только сервер
-TELEGRAM_BOT_TOKEN=<bot token>                 # только сервер
-TELEGRAM_WEBHOOK_SECRET=<случайный hex 32 байта>
-```
-
-Полный список с описанием — [.env.example](.env.example)
-
-### Применение миграций БД
-
-```bash
-# Вариант 1 — Supabase CLI
-npx supabase db push
-
-# Вариант 2 — вручную (Supabase Dashboard → SQL Editor)
-# Запустить файлы из supabase/migrations/ по порядку: 0001 → 0009
-# Правило: всегда применять все миграции по порядку до последней.
-```
-
-### Регистрация Telegram-вебхука (локально)
-
-```bash
-# Открыть публичный HTTPS-туннель
-cloudflared tunnel --url http://localhost:3000
-
-# Задать в .env.local: NEXT_PUBLIC_APP_URL=https://xxxx.trycloudflare.com
-npx tsx scripts/setup-telegram-webhook.ts
-```
-
----
-
-## Структура проекта
-
-```
-├── app/
-├── lib/
-├── components/
-├── supabase/
-│   ├── migrations/       # 0001_init → 0009_documents_user_cascade (актуальный полный набор)
-│   └── policies.sql      # Row Level Security политики
-│
-├── scripts/              # setup-telegram-webhook · grant-admin · ingest-documents · seed
-├── docs/                 # Архитектура · БД · API · Оркестратор · RAG · ADR
-├── Dockerfile            # 3 стадии: deps → builder → runner (node:22-alpine)
-└── docker-compose.yml
 ```
 
 Подробнее о структуре: `docs/dev-structure.md`.
@@ -187,16 +106,6 @@ npx tsx scripts/setup-telegram-webhook.ts
 
 ---
 
-## Архитектурные инварианты
-
-1. **Единый реестр** — добавление воркфлоу = одна запись в `lib/orchestrator/registry.ts`, больше ничего не меняется
-2. **Сервисы без HTTP** — `lib/services/*` вызываются одинаково из route handler, Telegram-вебхука и CLI-скрипта
-3. **Секреты только на сервере** — `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN` никогда не попадают в клиентский бандл
-4. **Загрузка не блокирует** — `/api/upload` отвечает за <500 мс; чанкинг и эмбеддинги выполняются через `waitUntil()`
-5. **Telegram всегда 200** — все ошибки логируются внутри; вебхук никогда не бросает исключение наружу
-6. **RLS на всех пользовательских таблицах** — `service_role` клиент используется только в фоновых задачах
-
----
 
 ## Лицензия
 
