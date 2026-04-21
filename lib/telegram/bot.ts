@@ -56,11 +56,41 @@ export async function sendMessage(opts: SendMessageOptions): Promise<void> {
   }
 }
 
+// ─── sendMessageChunks ───────────────────────────────────────────────────────
+
+/**
+ * Отправляет последовательно несколько сообщений (для длинных ответов,
+ * разбитых под лимит 4096 символов). Возвращает количество удачно отправленных.
+ */
+export async function sendMessageChunks(
+  chatId: number | string,
+  chunks: string[],
+  opts?: { parseMode?: SendMessageOptions["parseMode"]; replyToMessageId?: number }
+): Promise<number> {
+  let sent = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    await sendMessage({
+      chatId,
+      text: chunks[i],
+      parseMode: opts?.parseMode,
+      // reply_to только в первом сообщении, чтобы не засорять цитированием
+      replyToMessageId: i === 0 ? opts?.replyToMessageId : undefined,
+    });
+    sent += 1;
+  }
+  return sent;
+}
+
 // ─── sendChatAction ──────────────────────────────────────────────────────────
 
 export async function sendChatAction(
   chatId: number | string,
-  action: "typing" | "upload_voice" | "upload_document" = "typing"
+  action:
+    | "typing"
+    | "upload_voice"
+    | "upload_document"
+    | "upload_photo"
+    | "record_voice" = "typing"
 ): Promise<void> {
   const url = buildTelegramApiUrl("sendChatAction");
 

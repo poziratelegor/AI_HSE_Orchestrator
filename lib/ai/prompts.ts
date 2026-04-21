@@ -187,7 +187,7 @@ export function buildLetterPrompt(ctx?: StudentContext | null): string {
     ? `Письмо пишется от лица студента. Используй ИМЕННО эту подпись в конце письма: «${knownSignature}». Подставляй имя/факультет/курс прямо в текст там, где это уместно.`
     : "Имя студента неизвестно. Подпиши «Студент» и НЕ оставляй квадратные скобки/плейсхолдеры — пиши готовый текст, а не шаблон с пропусками.";
 
-  const courseLine = ctx?.courseNumber ? `Курс: ${ctx.courseNumber}.` : "";
+  const courseLine = ctx?.courseNumber ? `${ctx.courseNumber} курс.` : "";
   const universityLine = ctx?.university ? `ВУЗ: ${ctx.university}.` : "";
 
   const facts = [studentLine, courseLine, universityLine].filter(Boolean).join("\n");

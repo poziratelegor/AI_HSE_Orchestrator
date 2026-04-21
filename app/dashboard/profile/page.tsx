@@ -16,6 +16,7 @@ import {
   findFacultyIdByName
 } from "@/lib/hse/programs";
 import type { User } from "@supabase/supabase-js";
+import { TelegramLinkCard } from "./TelegramLinkCard";
 
 const HSE_NAME = "НИУ ВШЭ";
 const PROGRAM_OTHER = "__other__";
@@ -399,6 +400,8 @@ export default function ProfilePage() {
           </form>
         )}
       </div>
+
+      {!initializing && <TelegramLinkCard />}
     </div>
   );
 }
