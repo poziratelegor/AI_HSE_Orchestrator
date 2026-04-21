@@ -9,6 +9,7 @@ import { ResultBlock } from "@/components/dashboard/ResultBlock";
 import type { CitationSource } from "@/components/dashboard/Citation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
+import { normalizeOrchestrateResult } from "@/lib/orchestrator/normalize-result";
 
 const quickScenarios = [
   "Подготовить официальное письмо",
@@ -28,143 +29,6 @@ const recentPrompts = [
   { text: "Сделай список задач из загруженного syllabus", status: "В обработке" },
   { text: "Сократи письмо для куратора до делового формата", status: "Готово" }
 ];
-
-type ResultView = {
-  /** Главный текст ответа — то, что пользователь хочет видеть и копировать */
-  text: string;
-  /** Опциональный заголовок ("Письмо", "Конспект", ...) */
-  title?: string;
-  /** Опциональный subtitle (тема письма, summary) */
-  subtitle?: string;
-};
-
-function formatStudyPlan(data: Record<string, unknown>): string | null {
-  if (!Array.isArray(data.daily_plan) || data.daily_plan.length === 0) return null;
-
-  const goal = typeof data.goal === "string" && data.goal.trim() ? data.goal.trim() : "Учебный план";
-  const totalDays =
-    typeof data.total_days === "number" && Number.isFinite(data.total_days)
-      ? data.total_days
-      : data.daily_plan.length;
-
-  const planLines = data.daily_plan.map((item, index) => {
-    if (typeof item === "string") return `${index + 1}. ${item}`;
-
-    const row = item as Record<string, unknown>;
-    const day = typeof row.day === "number" ? `День ${row.day}` : `День ${index + 1}`;
-    const date = typeof row.date === "string" && row.date.trim() ? ` (${row.date})` : "";
-    const theme = typeof row.theme === "string" && row.theme.trim() ? row.theme : "Тема не указана";
-    const duration =
-      typeof row.duration_hours === "number" && Number.isFinite(row.duration_hours)
-        ? ` · ${row.duration_hours} ч`
-        : "";
-
-    const tasks =
-      Array.isArray(row.tasks) && row.tasks.length > 0
-        ? row.tasks.map((t) => `   - ${typeof t === "string" ? t : JSON.stringify(t)}`).join("\n")
-        : "   - Без уточнённых задач";
-
-    return `${day}${date}: ${theme}${duration}\n${tasks}`;
-  });
-
-  const resources =
-    Array.isArray(data.resources) && data.resources.length > 0
-      ? `\n\nРесурсы:\n${data.resources.map((r) => `- ${typeof r === "string" ? r : JSON.stringify(r)}`).join("\n")}`
-      : "";
-
-  const tips =
-    Array.isArray(data.tips) && data.tips.length > 0
-      ? `\n\nСоветы:\n${data.tips.map((t) => `- ${typeof t === "string" ? t : JSON.stringify(t)}`).join("\n")}`
-      : "";
-
-  return `${goal} (${totalDays} дн.)\n\n${planLines.join("\n\n")}${resources}${tips}`.trim();
-}
-
-function pickFromData(data: Record<string, unknown>): string | null {
-  // Письмо: subject + body
-  if (typeof data.body === "string" && data.body.trim()) return data.body;
-  if (typeof data.summary === "string" && data.summary.trim()) return data.summary;
-  if (typeof data.explanation === "string" && data.explanation.trim()) return data.explanation;
-  if (typeof data.answer === "string" && data.answer.trim()) return data.answer;
-  if (typeof data.text === "string" && data.text.trim()) return data.text;
-  if (typeof data.content === "string" && data.content.trim()) return data.content;
-  if (typeof data.markdown === "string" && data.markdown.trim()) return data.markdown;
-
-  // План / задачи / список — массивы
-  if (Array.isArray(data.tasks) && data.tasks.length > 0) {
-    return data.tasks
-      .map((t, i) => {
-        if (typeof t === "string") return `${i + 1}. ${t}`;
-        const r = t as Record<string, unknown>;
-        const title = (r.title ?? r.name ?? "Задача") as string;
-        const due = r.due_date || r.dueDate;
-        const prio = r.priority;
-        const extras = [due ? `до ${due}` : null, prio ? `приоритет: ${prio}` : null].filter(Boolean).join(", ");
-        return `${i + 1}. ${title}${extras ? ` (${extras})` : ""}`;
-      })
-      .join("\n");
-  }
-  if (Array.isArray(data.items) && data.items.length > 0) {
-    return data.items.map((x, i) => `${i + 1}. ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n");
-  }
-  if (Array.isArray(data.points) && data.points.length > 0) {
-    return data.points.map((x, i) => `${i + 1}. ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n");
-  }
-
-  // Учебный план (study_plan workflow)
-  const studyPlan = formatStudyPlan(data);
-  if (studyPlan) return studyPlan;
-
-  return null;
-}
-
-function renderResult(result: unknown): ResultView {
-  if (result === null || result === undefined) return { text: "" };
-  if (typeof result === "string") return { text: result };
-
-  const obj = result as Record<string, unknown>;
-
-  // Ошибочный ответ
-  if (obj.ok === false && typeof obj.message === "string") {
-    return { text: obj.message, title: "Ошибка" };
-  }
-
-  // Орхестратор оборачивает: { ok, intent, result: {...} }
-  // Внутри result.data лежат поля workflow.
-  const inner =
-    obj.result && typeof obj.result === "object"
-      ? (obj.result as Record<string, unknown>)
-      : obj;
-
-  const data =
-    inner.data && typeof inner.data === "object"
-      ? (inner.data as Record<string, unknown>)
-      : inner;
-
-  const workflow = (inner.workflow ?? obj.intent) as string | undefined;
-  const summary = typeof inner.summary === "string" ? inner.summary : undefined;
-  const subject = typeof data.subject === "string" ? data.subject : undefined;
-
-  const title = (() => {
-    switch (workflow) {
-      case "letter_generator": return "Письмо";
-      case "task_extractor":   return "Задачи";
-      case "study_plan":       return "Учебный план";
-      case "explain_this":     return "Объяснение";
-      case "cheat_sheet":      return "Шпаргалка";
-      case "quiz_generator":   return "Тест";
-      case "lecture_insight":  return "Конспект лекции";
-      case "rag_qa":           return "Ответ по документам";
-      default:                 return "Результат";
-    }
-  })();
-
-  const text = pickFromData(data);
-  if (text) return { text, title, subtitle: subject ?? summary };
-
-  // Fallback — что-то нестандартное; покажем JSON, но хотя бы не сломаемся.
-  return { text: JSON.stringify(inner, null, 2), title };
-}
 
 /** Three-dot typing animation indicator */
 function TypingIndicator() {
@@ -589,7 +453,7 @@ export default function AssistantClient() {
 
             {/* Result */}
             {result !== null && !error && !isLoading && (() => {
-              const view = renderResult(result);
+              const view = normalizeOrchestrateResult(result);
               if (!view.text) return null;
               return (
                 <div className="mt-4">
