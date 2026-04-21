@@ -117,6 +117,31 @@ describe("normalizeOrchestrateResult", () => {
     expect(r.text).toContain("Уточните формат");
   });
 
+
+  it("uses intent when workflow lives at top-level payload", () => {
+    const r = normalizeOrchestrateResult({
+      ok: true,
+      intent: "letter_generator",
+      result: { data: { subject: "Срочно", body: "Текст из intent-маршрута" } },
+    });
+
+    expect(r.workflow).toBe("letter_generator");
+    expect(r.title).toBe("Письмо");
+    expect(r.text).toBe("Текст из intent-маршрута");
+    expect(r.subtitle).toBe("Срочно");
+  });
+
+  it("normalizes clarification by suggestion field", () => {
+    const r = normalizeOrchestrateResult({
+      ok: true,
+      suggestion: "Уточните тип результата: письмо или план",
+    });
+
+    expect(r.status).toBe("clarification");
+    expect(r.workflow).toBe("route_recommender");
+    expect(r.text).toContain("Уточните тип результата");
+  });
+
   it("normalizes error", () => {
     const r = normalizeOrchestrateResult({ ok: false, message: "Ошибка выполнения" });
     expect(r.status).toBe("error");

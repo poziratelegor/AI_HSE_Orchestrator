@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { SectionCard, StatusBadge, EmptyState, InlineAlert, Spinner } from "@/components/dashboard/ui";
+import { SectionCard, InlineAlert } from "@/components/dashboard/ui";
 import { HowItWorks } from "@/components/dashboard/HowItWorks";
 import { WorkflowPicker } from "@/components/dashboard/WorkflowPicker";
 import { Markdown } from "@/components/dashboard/Markdown";
@@ -10,6 +10,7 @@ import type { CitationSource } from "@/components/dashboard/Citation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import { normalizeOrchestrateResult } from "@/lib/orchestrator/normalize-result";
+import { RecentPromptsPanel, type RecentPrompt } from "@/components/dashboard/RecentPromptsPanel";
 
 const quickScenarios = [
   "Подготовить официальное письмо",
@@ -23,9 +24,6 @@ const examples = [
   "Выдели ключевые тезисы из методички по статистике.",
   "Собери план подготовки к экзамену за 10 дней."
 ];
-
-type RecentPromptStatus = "Готово" | "В обработке" | "Ошибка";
-type RecentPrompt = { id: string; text: string; status: RecentPromptStatus; createdAt?: string; optimistic?: boolean };
 
 /** Three-dot typing animation indicator */
 function TypingIndicator() {
@@ -59,7 +57,7 @@ export default function AssistantClient() {
   const [streamCitations, setStreamCitations] = useState<CitationSource[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [recentPrompts, setRecentPrompts] = useState<RecentPrompt[]>([]);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -72,39 +70,6 @@ export default function AssistantClient() {
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, []);
-
-  const loadHistory = async () => {
-    setIsHistoryLoading(true);
-    try {
-      const supabase = getSupabaseBrowserClient();
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-
-      const response = await fetch("/api/analytics/history?limit=5", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-      });
-
-      const payload = (await response.json()) as {
-        ok: boolean;
-        items?: Array<{ id: string; text: string; status: RecentPromptStatus; createdAt?: string }>;
-      };
-
-      if (!payload.ok || !Array.isArray(payload.items)) return;
-
-      setRecentPrompts((prev) => {
-        const optimisticItems = prev.filter((item) => item.optimistic);
-        return [...optimisticItems, ...payload.items];
-      });
-    } catch {
-      // Не блокируем UX карточки ассистента из-за недоступной аналитики.
-    } finally {
-      setIsHistoryLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadHistory();
   }, []);
 
   const toggleRecording = async () => {
@@ -254,7 +219,7 @@ export default function AssistantClient() {
       toast.error(msg);
     } finally {
       setIsLoading(false);
-      void loadHistory();
+      setHistoryRefreshToken((prev) => prev + 1);
     }
   };
 
@@ -550,36 +515,11 @@ export default function AssistantClient() {
       </div>
 
       <div className="animate-slide-in-right delay-150">
-        <SectionCard title="Недавние запросы" subtitle="Последние события вашего аккаунта.">
-          <div className="space-y-3">
-            {recentPrompts.map((item, i) => (
-              <div
-                key={item.text}
-                className="animate-fade-in cursor-pointer rounded-xl border border-[var(--hse-border)] p-3 transition-all duration-200 hover:border-[var(--hse-blue)]/20 hover:bg-[var(--hse-light)]/20 hover:-translate-y-px"
-                style={{ animationDelay: `${i * 80}ms` }}
-                onClick={() => setQuery(item.text)}
-              >
-                <p className="text-sm text-slate-800">{item.text}</p>
-                <div className="mt-2">
-                  <StatusBadge
-                    label={item.status}
-                    tone={item.status === "Готово" ? "success" : item.status === "Ошибка" ? "danger" : "warning"}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-          {recentPrompts.length === 0 && !isHistoryLoading && (
-            <div className="mt-4">
-              <EmptyState title="История пока пустая" description="Отправьте первый запрос — событие появится в списке." />
-            </div>
-          )}
-          {isHistoryLoading && (
-            <div className="mt-4 flex items-center gap-2 text-xs text-[var(--hse-text-muted)]">
-              <Spinner size="sm" /> Обновляю историю…
-            </div>
-          )}
-        </SectionCard>
+        <RecentPromptsPanel
+          optimisticPrompts={recentPrompts}
+          refreshToken={historyRefreshToken}
+          onPromptSelect={setQuery}
+        />
       </div>
     </div>
   );
