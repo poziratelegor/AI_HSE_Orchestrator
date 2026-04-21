@@ -193,43 +193,16 @@ npx tsx scripts/setup-telegram-webhook.ts
 
 ```
 ├── app/
-│   ├── (auth)/           # Вход · Регистрация · OAuth callback · Профиль
-│   ├── (marketing)/      # Лендинг / страница воронки
-│   ├── api/              # Route handlers — auth → валидация → сервис → JSON
-│   │   ├── orchestrate/  # Главная точка входа
-│   │   ├── upload/       # Асинхронная загрузка файлов
-│   │   ├── rag/query/    # Семантический поиск с Redis-кэшем
-│   │   ├── telegram/     # Вебхук с проверкой секрета
-│   │   └── ...           # letters · tasks · quiz · planner · transcribe · analytics
-│   └── dashboard/        # Ассистент · Документы · Лекции · Письма · Задачи · Аналитика
-│
 ├── lib/
-│   ├── orchestrator/     # Router · Classifier (LLM+KW) · Registry · Executor · Policies
-│   ├── services/
-│   │   ├── content/      # rag-qa · lecture-insight · explain · cheatsheet · quiz
-│   │   ├── planning/     # tasks · planner
-│   │   ├── communication/# letters
-│   │   └── documents/    # ingestion (PDF/audio → chunk → embed) · transcribe
-│   ├── rag/              # chunk · embed · retrieve · expand-query · citations
-│   ├── ai/               # OpenAI client · prompts · retry · token-guard · schemas
-│   ├── repository/       # Доступ к данным — auth · documents · letters · tasks
-│   ├── integrations/     # YouTube транскрипты · HSE SmartLMS · iCalendar (RFC 5545)
-│   ├── cache/            # Обёртка Upstash Redis (fetch-based, без SDK)
-│   └── supabase/         # Клиенты browser + server · auth middleware
-│
 ├── components/
-│   ├── auth/             # AuthShell · GoogleSignInButton · LogoutButton
-│   └── dashboard/        # SidebarNav · WorkflowPicker · HowItWorks · UI-примитивы
-│
 ├── supabase/
-│   ├── migrations/       # 0001_init → 0006_user_roles (9 таблиц + pgvector)
-│   └── policies.sql      # Row Level Security политики
-│
-├── scripts/              # setup-telegram-webhook · grant-admin · ingest-documents · seed
-├── docs/                 # Архитектура · БД · API · Оркестратор · RAG · ADR
-├── Dockerfile            # 3 стадии: deps → builder → runner (node:22-alpine)
+├── scripts/
+├── docs/
+├── Dockerfile
 └── docker-compose.yml
 ```
+
+Подробнее о структуре: `docs/dev-structure.md`.
 
 ---
 
