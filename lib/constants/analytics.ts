@@ -2,6 +2,8 @@ export const ANALYTICS_EVENTS = {
   ORCHESTRATE_SUCCESS: "orchestrate_success",
   ORCHESTRATE_FALLBACK: "orchestrate_fallback",
   ORCHESTRATE_ERROR: "orchestrate_error",
+  TRANSCRIBE_SUCCESS: "transcribe_success",
+  TRANSCRIBE_ERROR: "transcribe_error",
   DOCUMENT_UPLOADED: "document_uploaded",
   DOCUMENT_READY: "document_ready",
   DOCUMENT_FAILED: "document_failed",

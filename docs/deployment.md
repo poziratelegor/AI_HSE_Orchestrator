@@ -259,3 +259,26 @@ SELECT
 FROM orchestrator_runs
 WHERE created_at > NOW() - INTERVAL '7 days';
 ```
+
+### Диагностика доставки analytics events (Vercel Logs)
+
+`trackEvent` работает в fail-soft режиме: ошибка аналитики не прерывает пользовательский запрос, но в логах появляются структурированные маркеры.
+
+- `ANALYTICS_DELIVERY_WARN` — временная ошибка доставки, включился retry.
+- `ANALYTICS_DELIVERY_ERROR` — все retry-итерации исчерпаны или ошибка не временная.
+
+Для быстрой фильтрации в Vercel:
+
+1. Открыть **Vercel → Project → Logs**.
+2. Фильтр по строке `ANALYTICS_DELIVERY_WARN` или `ANALYTICS_DELIVERY_ERROR`.
+3. Проверить структурированные поля в записи:
+   - `eventName`
+   - `userId`
+   - `workflow`
+   - `attempt`
+   - `errorCode`
+
+Если видите рост `ANALYTICS_DELIVERY_ERROR`, проверьте:
+- доступность Supabase (`NEXT_PUBLIC_SUPABASE_URL`, ключи, egress);
+- наличие массовых таймаутов/сетевых сбоев у serverless-функций;
+- корректность `channel/workflow/meta` у вызывающих API-роутов (для сегментации и поиска в логах).
