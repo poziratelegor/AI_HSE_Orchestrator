@@ -23,11 +23,8 @@ const examples = [
   "Собери план подготовки к экзамену за 10 дней."
 ];
 
-const recentPrompts = [
-  { text: "Подготовь ответ в учебный офис по академической справке", status: "Готово" },
-  { text: "Сделай список задач из загруженного syllabus", status: "В обработке" },
-  { text: "Сократи письмо для куратора до делового формата", status: "Готово" }
-];
+type RecentPromptStatus = "Готово" | "В обработке" | "Ошибка";
+type RecentPrompt = { id: string; text: string; status: RecentPromptStatus; createdAt?: string; optimistic?: boolean };
 
 type ResultView = {
   /** Главный текст ответа — то, что пользователь хочет видеть и копировать */
@@ -197,6 +194,8 @@ export default function AssistantClient() {
   const [streamedText, setStreamedText] = useState<string>("");
   const [streamCitations, setStreamCitations] = useState<CitationSource[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [recentPrompts, setRecentPrompts] = useState<RecentPrompt[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -209,6 +208,39 @@ export default function AssistantClient() {
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
+  const loadHistory = async () => {
+    setIsHistoryLoading(true);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      const response = await fetch("/api/analytics/history?limit=5", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+
+      const payload = (await response.json()) as {
+        ok: boolean;
+        items?: Array<{ id: string; text: string; status: RecentPromptStatus; createdAt?: string }>;
+      };
+
+      if (!payload.ok || !Array.isArray(payload.items)) return;
+
+      setRecentPrompts((prev) => {
+        const optimisticItems = prev.filter((item) => item.optimistic);
+        return [...optimisticItems, ...payload.items];
+      });
+    } catch {
+      // Не блокируем UX карточки ассистента из-за недоступной аналитики.
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadHistory();
   }, []);
 
   const toggleRecording = async () => {
@@ -284,6 +316,7 @@ export default function AssistantClient() {
   const handleSubmit = async (overrideQuery?: string) => {
     const text = (overrideQuery ?? query).trim();
     if (!text) return;
+    const optimisticId = `optimistic-${Date.now()}`;
 
     setIsLoading(true);
     setError(null);
@@ -291,6 +324,7 @@ export default function AssistantClient() {
     setStreamedText("");
     setStreamCitations([]);
     setShowWorkflowPicker(false);
+    setRecentPrompts((prev) => [{ id: optimisticId, text, status: "В обработке", optimistic: true }, ...prev].slice(0, 5));
 
     try {
       const supabase = getSupabaseBrowserClient();
@@ -330,6 +364,7 @@ export default function AssistantClient() {
         setClarificationQuestion(data.clarificationQuestion ?? null);
         setShowWorkflowPicker(true);
         setResult(null);
+        setRecentPrompts((prev) => prev.map((item) => (item.id === optimisticId ? { ...item, status: "Готово" } : item)));
         return;
       }
 
@@ -338,21 +373,28 @@ export default function AssistantClient() {
       // RAG ответ — переключаемся на streaming
       if (data.intent === "rag_qa") {
         setResult(null);
-        void streamRagAnswer(text);
+        void streamRagAnswer(text, optimisticId);
       } else {
         setResult(payload);
+        setRecentPrompts((prev) =>
+          prev.map((item) => (item.id === optimisticId ? { ...item, status: "Готово", optimistic: false } : item))
+        );
         toast.success("Запрос обработан успешно");
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Сетевая ошибка.";
       setError(msg);
+      setRecentPrompts((prev) =>
+        prev.map((item) => (item.id === optimisticId ? { ...item, status: "Ошибка", optimistic: false } : item))
+      );
       toast.error(msg);
     } finally {
       setIsLoading(false);
+      void loadHistory();
     }
   };
 
-  const streamRagAnswer = async (question: string) => {
+  const streamRagAnswer = async (question: string, optimisticId: string) => {
     setIsStreaming(true);
     setStreamedText("");
     setStreamCitations([]);
@@ -416,9 +458,15 @@ export default function AssistantClient() {
       }
 
       toast.success("Ответ готов");
+      setRecentPrompts((prev) =>
+        prev.map((item) => (item.id === optimisticId ? { ...item, status: "Готово", optimistic: false } : item))
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Сетевая ошибка";
       setError(msg);
+      setRecentPrompts((prev) =>
+        prev.map((item) => (item.id === optimisticId ? { ...item, status: "Ошибка", optimistic: false } : item))
+      );
       toast.error(msg);
     } finally {
       setIsStreaming(false);
@@ -638,7 +686,7 @@ export default function AssistantClient() {
       </div>
 
       <div className="animate-slide-in-right delay-150">
-        <SectionCard title="Недавние запросы" subtitle="История запросов текущей сессии.">
+        <SectionCard title="Недавние запросы" subtitle="Последние события вашего аккаунта.">
           <div className="space-y-3">
             {recentPrompts.map((item, i) => (
               <div
@@ -649,17 +697,24 @@ export default function AssistantClient() {
               >
                 <p className="text-sm text-slate-800">{item.text}</p>
                 <div className="mt-2">
-                  <StatusBadge label={item.status} tone={item.status === "Готово" ? "success" : "warning"} />
+                  <StatusBadge
+                    label={item.status}
+                    tone={item.status === "Готово" ? "success" : item.status === "Ошибка" ? "danger" : "warning"}
+                  />
                 </div>
               </div>
             ))}
           </div>
-          <div className="mt-4">
-            <EmptyState
-              title="История ограничена"
-              description="После подключения backend здесь появится полный журнал запросов и результатов."
-            />
-          </div>
+          {recentPrompts.length === 0 && !isHistoryLoading && (
+            <div className="mt-4">
+              <EmptyState title="История пока пустая" description="Отправьте первый запрос — событие появится в списке." />
+            </div>
+          )}
+          {isHistoryLoading && (
+            <div className="mt-4 flex items-center gap-2 text-xs text-[var(--hse-text-muted)]">
+              <Spinner size="sm" /> Обновляю историю…
+            </div>
+          )}
         </SectionCard>
       </div>
     </div>
