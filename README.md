@@ -48,69 +48,16 @@
 
 ---
 
-## Архитектура
+## Architecture in 6 bullets
 
-```mermaid
-graph TB
-    subgraph Channels["Каналы ввода"]
-        WEB["🌐 Веб-приложение\nNext.js 15"]
-        TG["✈️ Telegram-бот"]
-    end
+1. Два канала входа: веб-приложение и Telegram-бот.
+2. Все пользовательские запросы проходят через API-слой (`/api/orchestrate`, `/api/upload`, `/api/rag/query`, webhook Telegram).
+3. Оркестратор параллельно запускает LLM-классификацию и keyword-fallback, затем выбирает intent и confidence.
+4. Исполнитель вызывает один из 9 воркфлоу из реестра (`rag_qa`, `letter_generator`, `task_extractor`, и др.).
+5. `rag_qa` и ingestion используют общий RAG-пайплайн: chunk → embeddings → pgvector retrieve → citations.
+6. Инфраструктура: Supabase (PostgreSQL + pgvector), OpenAI (GPT-4o-mini/Whisper), Upstash Redis (кэш и rate limit).
 
-    subgraph API["API-слой (Route Handlers)"]
-        ORCH["POST /api/orchestrate"]
-        UPLOAD["POST /api/upload"]
-        RAG_API["POST /api/rag/query"]
-        TG_WH["POST /api/telegram/webhook"]
-    end
-
-    subgraph Orchestrator["Движок оркестратора"]
-        ROUTER["Router"]
-        CLASSIFY["Классификатор намерений\n━━━━━━━━━━━━\nLLM (GPT-4o) ‖ Ключевые слова\nпараллельно, таймаут 8 с"]
-        EXECUTOR["Исполнитель воркфлоу"]
-        REGISTRY["Реестр · 9 воркфлоу"]
-    end
-
-    subgraph Services["Сервисы воркфлоу"]
-        S1["rag_qa"]
-        S2["letter_generator"]
-        S3["task_extractor"]
-        S4["lecture_insight"]
-        S5["study_plan · quiz\ncheatsheet · explain"]
-    end
-
-    subgraph RAG["RAG-пайплайн"]
-        CHUNK["Чанкер\n800 токенов, overlap 2 предложения"]
-        EMBED["Эмбеддер\ntext-embedding-3-small\n1536 измерений"]
-        RETRIEVE["pgvector поиск\ncosine similarity ≥ 0.5"]
-        EXPAND["Расширение запроса\n3 варианта от LLM"]
-    end
-
-    subgraph Infra["Инфраструктура"]
-        DB[("Supabase\nPostgreSQL + pgvector")]
-        AI["OpenAI\nGPT-4o-mini · Whisper"]
-        CACHE[("Upstash Redis\nКэш RAG 1 ч · rate limit")]
-    end
-
-    WEB --> ORCH & UPLOAD & RAG_API
-    TG --> TG_WH
-    ORCH --> ROUTER
-    ROUTER --> CLASSIFY --> EXECUTOR --> REGISTRY
-    REGISTRY --> S1 & S2 & S3 & S4 & S5
-    S1 --> RAG
-    UPLOAD --> RAG
-    RAG --> DB & AI
-    Services --> AI
-    API --> CACHE & DB
-```
-
-**Политика confidence** — классификатор возвращает оценку уверенности от 0.0 до 1.0:
-
-| Оценка | Действие |
-|---|---|
-| ≥ 0.75 | Выполнить воркфлоу напрямую |
-| 0.45 – 0.74 | Показать WorkflowPicker, уточнить намерение |
-| < 0.45 | Общий fallback со списком всех воркфлоу |
+**Подробно: [docs/architecture.md](docs/architecture.md)**.
 
 ---
 
@@ -194,34 +141,8 @@ npx tsx scripts/setup-telegram-webhook.ts
 
 ```
 ├── app/
-│   ├── (auth)/           # Вход · Регистрация · OAuth callback · Профиль
-│   ├── (marketing)/      # Лендинг / страница воронки
-│   ├── api/              # Route handlers — auth → валидация → сервис → JSON
-│   │   ├── orchestrate/  # Главная точка входа
-│   │   ├── upload/       # Асинхронная загрузка файлов
-│   │   ├── rag/query/    # Семантический поиск с Redis-кэшем
-│   │   ├── telegram/     # Вебхук с проверкой секрета
-│   │   └── ...           # letters · tasks · quiz · planner · transcribe · analytics
-│   └── dashboard/        # Ассистент · Документы · Лекции · Письма · Задачи · Аналитика
-│
 ├── lib/
-│   ├── orchestrator/     # Router · Classifier (LLM+KW) · Registry · Executor · Policies
-│   ├── services/
-│   │   ├── content/      # rag-qa · lecture-insight · explain · cheatsheet · quiz
-│   │   ├── planning/     # tasks · planner
-│   │   ├── communication/# letters
-│   │   └── documents/    # ingestion (PDF/audio → chunk → embed) · transcribe
-│   ├── rag/              # chunk · embed · retrieve · expand-query · citations
-│   ├── ai/               # OpenAI client · prompts · retry · token-guard · schemas
-│   ├── repository/       # Доступ к данным — auth · documents · letters · tasks
-│   ├── integrations/     # YouTube транскрипты · HSE SmartLMS · iCalendar (RFC 5545)
-│   ├── cache/            # Обёртка Upstash Redis (fetch-based, без SDK)
-│   └── supabase/         # Клиенты browser + server · auth middleware
-│
 ├── components/
-│   ├── auth/             # AuthShell · GoogleSignInButton · LogoutButton
-│   └── dashboard/        # SidebarNav · WorkflowPicker · HowItWorks · UI-примитивы
-│
 ├── supabase/
 │   ├── migrations/       # 0001_init → 0009_documents_user_cascade (актуальный полный набор)
 │   └── policies.sql      # Row Level Security политики
@@ -231,6 +152,8 @@ npx tsx scripts/setup-telegram-webhook.ts
 ├── Dockerfile            # 3 стадии: deps → builder → runner (node:22-alpine)
 └── docker-compose.yml
 ```
+
+Подробнее о структуре: `docs/dev-structure.md`.
 
 ---
 
@@ -243,21 +166,10 @@ npx tsx scripts/setup-telegram-webhook.ts
 | `POST` | `/api/orchestrate` | Текст → классификация намерения → выполнение воркфлоу |
 | `POST` | `/api/upload` | Загрузка PDF / TXT / аудио (асинхронная обработка) |
 | `GET` | `/api/documents/:id/status` | Опрос статуса обработки документа |
-| `POST` | `/api/rag/query` | Семантический вопрос-ответ по документам |
-| `POST` | `/api/chat` | Диалоговый ассистент |
-| `POST` | `/api/letters/generate` | Генерация официального письма |
-| `POST` | `/api/tasks/extract` | Извлечение задач и дедлайнов |
-| `POST` | `/api/quiz/generate` | Генерация тестовых вопросов |
-| `POST` | `/api/cheatsheet/generate` | Генерация шпаргалки |
-| `POST` | `/api/planner/build` | Составление учебного плана |
-| `POST` | `/api/lecture-notes` | Конспект по транскрипту аудио |
-| `POST` | `/api/transcribe` | Аудиофайл → текст (Whisper) |
-| `POST` | `/api/transcribe/microphone` | Запись с микрофона браузера → текст |
 | `POST` | `/api/telegram/webhook` | Обновления Telegram Bot |
-| `POST` | `/api/analytics/event` | Запись события продуктовой аналитики |
 | `GET` | `/api/health` | Health check |
 
-Полные схемы запросов/ответов → [docs/api.md](docs/api.md)
+**Полный API: [docs/api.md](docs/api.md)**
 
 ---
 
