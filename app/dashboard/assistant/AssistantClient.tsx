@@ -72,36 +72,6 @@ export default function AssistantClient() {
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, []);
 
-  useEffect(() => {
-    const loadRecentHistory = async () => {
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        const response = await fetch("/api/analytics/history?limit=6", {
-          headers: token ? { Authorization: `Bearer ${token}` } : {}
-        });
-        if (!response.ok) return;
-
-        const payload = (await response.json()) as {
-          ok?: boolean;
-          items?: {
-            text: string;
-            status: "Готово" | "Ошибка" | "Уточнение" | "Маршрут";
-            workflow?: string | null;
-            createdAt?: string;
-          }[];
-        };
-        if (payload.ok && Array.isArray(payload.items)) setRecentPrompts(payload.items);
-      } catch {
-        // Optional UI block: ignore failures silently.
-      } finally {
-        setHistoryLoading(false);
-      }
-    };
-    void loadRecentHistory();
-  }, []);
-
   const toggleRecording = async () => {
     if (isRecording) {
       mediaRecorderRef.current?.stop();
@@ -183,7 +153,8 @@ export default function AssistantClient() {
     setStreamedText("");
     setStreamCitations([]);
     setShowWorkflowPicker(false);
-    setRecentPrompts((prev) => [{ id: optimisticId, text, status: "В обработке", optimistic: true }, ...prev].slice(0, 5));
+    const optimisticPrompt: RecentPrompt = { id: optimisticId, text, status: "В обработке", optimistic: true };
+    setRecentPrompts((prev) => [optimisticPrompt, ...prev].slice(0, 5));
 
     try {
       const supabase = getSupabaseBrowserClient();
