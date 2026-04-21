@@ -18,6 +18,9 @@ export async function POST(request: Request) {
   if (!audioBlob || !(audioBlob instanceof Blob)) {
     return ERRORS.INVALID_INPUT("Поле 'audio' обязательно (Blob).");
   }
+  if (audioBlob.size === 0) {
+    return ERRORS.INVALID_INPUT("Аудио пустое. Запишите сообщение ещё раз.");
+  }
 
   if (audioBlob.size > 25 * 1024 * 1024) {
     return ERRORS.INVALID_INPUT("Файл превышает лимит 25 МБ.");

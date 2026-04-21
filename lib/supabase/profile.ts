@@ -16,6 +16,38 @@ export type ProfileData = {
   program?: string | null;
 };
 
+const MAX_FULL_NAME_LENGTH = 120;
+const MAX_GROUP_NAME_LENGTH = 32;
+
+function normalizeGroupName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const compact = value
+    .trim()
+    .toUpperCase()
+    .replace(/[–—]/g, "-")
+    .replace(/[\s_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!compact) return null;
+
+  // Пример: БПИ241 / БПИ-241 -> БПИ-241
+  const simple = compact.match(/^([A-ZА-ЯЁ]+)-?(\d{2,4})$/u);
+  if (simple) {
+    return `${simple[1]}-${simple[2]}`.slice(0, MAX_GROUP_NAME_LENGTH);
+  }
+
+  // Пример: МИВ21_1 / МИВ21-1 / МИВ-21-1 -> МИВ-21-1
+  const splitYearGroup = compact.match(/^([A-ZА-ЯЁ]+)-?(\d{1,2})-?(\d{1,2})$/u);
+  if (splitYearGroup) {
+    return `${splitYearGroup[1]}-${splitYearGroup[2]}-${splitYearGroup[3]}`.slice(
+      0,
+      MAX_GROUP_NAME_LENGTH
+    );
+  }
+
+  return compact.slice(0, MAX_GROUP_NAME_LENGTH);
+}
+
 const PROFILE_COLUMNS =
   "full_name, email, university, faculty, group_name, course_number, campus, education_level, program";
 
@@ -61,8 +93,14 @@ export async function upsertProfile(
   data: ProfileData,
   supabase: SupabaseClient
 ): Promise<{ error: string | null }> {
+  const sanitized: ProfileData = {
+    ...data,
+    full_name: data.full_name?.trim().slice(0, MAX_FULL_NAME_LENGTH) ?? null,
+    group_name: normalizeGroupName(data.group_name),
+  };
+
   const { error } = await supabase
     .from("profiles")
-    .upsert({ id: userId, ...data }, { onConflict: "id" });
+    .upsert({ id: userId, ...sanitized }, { onConflict: "id" });
   return { error: error?.message ?? null };
 }

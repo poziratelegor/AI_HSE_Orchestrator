@@ -29,6 +29,7 @@ type TaskRow = {
   title: string | null;
   due_date: string | null;
   priority: string | null;
+  status?: string | null;
   notified_24h_at: string | null;
   notified_1h_at: string | null;
 };
@@ -187,6 +188,51 @@ export async function GET(request: Request) {
   const errors: { taskId: string; reason: string }[] = [];
 
   for (const { task, window } of buckets) {
+    // Re-check актуальное состояние задачи перед отправкой:
+    // защищает от race condition, когда задачу закрыли/перенесли после выборки.
+    const { data: latestTask, error: latestErr } = await supabase
+      .from("tasks")
+      .select("id, title, due_date, priority, status, notified_24h_at, notified_1h_at")
+      .eq("id", task.id)
+      .maybeSingle();
+    if (latestErr || !latestTask) {
+      skipped += 1;
+      continue;
+    }
+    const latest = latestTask as TaskRow;
+    if (latest.status === "done" || latest.status === "cancelled") {
+      skipped += 1;
+      continue;
+    }
+    if (window === "tomorrow" && latest.notified_24h_at) {
+      skipped += 1;
+      continue;
+    }
+    if (window === "today" && latest.notified_1h_at) {
+      skipped += 1;
+      continue;
+    }
+    if (!latest.due_date) {
+      skipped += 1;
+      continue;
+    }
+    const dueTs = new Date(latest.due_date).getTime();
+    if (!Number.isFinite(dueTs)) {
+      skipped += 1;
+      continue;
+    }
+    if (window === "today") {
+      if (dueTs < now.getTime() || dueTs >= startOfTomorrowUtc.getTime()) {
+        skipped += 1;
+        continue;
+      }
+    } else {
+      if (dueTs < startOfTomorrowUtc.getTime() || dueTs >= startOfDayAfterUtc.getTime()) {
+        skipped += 1;
+        continue;
+      }
+    }
+
     const tgId = tgByUser.get(task.user_id);
     if (!tgId) {
       // Telegram не привязан — просто помечаем как обработанное, чтобы не висело в выборке
@@ -201,7 +247,7 @@ export async function GET(request: Request) {
     try {
       await sendMessage({
         chatId: tgId,
-        text: buildMessage(task, window),
+        text: buildMessage(latest, window),
         parseMode: "Markdown"
       });
 

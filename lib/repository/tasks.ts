@@ -10,6 +10,7 @@ export type TaskRow = {
   status: string | null;
   priority: string | null;
   created_at: string | null;
+  updated_at?: string | null;
 };
 
 export async function getUserTasks(userId: string, filter: TaskFilter = "all"): Promise<TaskRow[]> {
@@ -17,7 +18,7 @@ export async function getUserTasks(userId: string, filter: TaskFilter = "all"): 
 
   let query = supabase
     .from("tasks")
-    .select("id, title, description, due_date, status, priority, created_at")
+    .select("id, title, description, due_date, status, priority, created_at, updated_at")
     .eq("user_id", userId)
     .order("due_date", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: false });
@@ -116,19 +117,31 @@ export async function createTasks(
 export async function updateTaskStatus(
   taskId: string,
   userId: string,
-  status: TaskStatus
-): Promise<{ ok: true } | { ok: false; error: string }> {
+  status: TaskStatus,
+  expectedUpdatedAt?: string
+): Promise<{ ok: true; updatedAt: string } | { ok: false; error: string; code?: "conflict" }> {
   const supabase = getSupabaseServerClient();
 
-  const { error } = await supabase
+  const nextUpdatedAt = new Date().toISOString();
+  let query = supabase
     .from("tasks")
-    .update({ status, updated_at: new Date().toISOString() })
+    .update({ status, updated_at: nextUpdatedAt }, { count: "exact" })
     .eq("id", taskId)
     .eq("user_id", userId);
+  if (expectedUpdatedAt) query = query.eq("updated_at", expectedUpdatedAt);
+
+  const { error, count } = await query;
 
   if (error) {
     return { ok: false, error: error.message };
   }
+  if ((count ?? 0) === 0) {
+    return {
+      ok: false,
+      code: "conflict",
+      error: "Задача была изменена в другой вкладке. Обновите страницу и повторите действие."
+    };
+  }
 
-  return { ok: true };
+  return { ok: true, updatedAt: nextUpdatedAt };
 }

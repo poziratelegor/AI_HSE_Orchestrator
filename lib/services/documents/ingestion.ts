@@ -59,12 +59,36 @@ export async function findDuplicateDocument(
  */
 async function extractText(buffer: Buffer, mimeType: string): Promise<string> {
   if (mimeType === "text/plain") {
-    return buffer.toString("utf-8");
+    const text = buffer.toString("utf-8").trim();
+    if (!text) {
+      throw new Error("Документ пустой или не содержит читаемого текста.");
+    }
+    return text;
   }
 
   if (mimeType === "application/pdf") {
-    const parsed = await pdf(buffer);
-    return parsed.text;
+    try {
+      const parsed = await pdf(buffer);
+      const text = (parsed.text ?? "").trim();
+      if (!text) {
+        throw new Error(
+          "PDF не содержит извлекаемого текста (возможно, скан). Загрузите PDF с текстовым слоем или OCR-версию."
+        );
+      }
+      return text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : "";
+      if (
+        msg.includes("password") ||
+        msg.includes("encrypted") ||
+        msg.includes("decrypt") ||
+        msg.includes("encryption")
+      ) {
+        throw new Error("PDF защищён паролем. Удалите пароль и загрузите файл снова.");
+      }
+      if (err instanceof Error) throw err;
+      throw new Error("Не удалось прочитать PDF.");
+    }
   }
 
   if (mimeType.startsWith("audio/")) {
@@ -131,8 +155,7 @@ export async function processDocument(input: ProcessDocumentInput) {
     const chunks = chunkText(text);
 
     if (chunks.length === 0) {
-      await updateDocumentStatus(input.documentId, "ready");
-      return;
+      throw new Error("Не удалось извлечь текст из документа.");
     }
 
     // Remove stale chunks from previous processing attempts

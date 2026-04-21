@@ -8,12 +8,15 @@ export interface RateLimitConfig {
   windowSeconds: number;
   /** Descriptive action name for logging */
   action: string;
+  /** When true (default), Redis errors allow request. When false, deny on Redis failures. */
+  failOpen?: boolean;
 }
 
 const DEFAULTS: RateLimitConfig = {
   limit: 30,
   windowSeconds: 60,
-  action: "api_request"
+  action: "api_request",
+  failOpen: true
 };
 
 /**
@@ -32,7 +35,7 @@ export async function checkRateLimit(
   userId: string,
   config: Partial<RateLimitConfig> = {}
 ): Promise<{ allowed: true } | { allowed: false; response: NextResponse }> {
-  const { limit, windowSeconds, action } = { ...DEFAULTS, ...config };
+  const { limit, windowSeconds, action, failOpen } = { ...DEFAULTS, ...config };
 
   try {
     // Fixed window bucket: floor(now / windowMs)
@@ -42,11 +45,33 @@ export async function checkRateLimit(
     // Read current count
     const raw = await cacheGet(key);
 
-    // Redis unavailable → fail open
+    // Redis unavailable
     if (raw === null && process.env.UPSTASH_REDIS_REST_URL) {
-      // Could not reach Redis at all — allow request
-      console.warn("[rate-limit] Redis unavailable, allowing request");
-      return { allowed: true };
+      if (failOpen) {
+        // Could not reach Redis at all — allow request
+        console.warn("[rate-limit] Redis unavailable, allowing request");
+        return { allowed: true };
+      }
+      console.warn("[rate-limit] Redis unavailable, denying request (fail-closed)");
+      return {
+        allowed: false,
+        response: NextResponse.json(
+          {
+            ok: false,
+            error: "rate_limit_unavailable",
+            message: "Сервис временно недоступен. Попробуйте позже.",
+            retryAfterSeconds: windowSeconds
+          },
+          {
+            status: 503,
+            headers: {
+              "Retry-After": String(windowSeconds),
+              "X-RateLimit-Limit": String(limit),
+              "X-RateLimit-Window": String(windowSeconds)
+            }
+          }
+        )
+      };
     }
 
     const current = raw !== null ? parseInt(raw, 10) : 0;
@@ -82,9 +107,31 @@ export async function checkRateLimit(
 
     return { allowed: true };
   } catch (err) {
-    // Fail open — never block a legitimate request due to our own bug
-    console.warn("[rate-limit] unexpected error, allowing request:", err);
-    return { allowed: true };
+    if (failOpen) {
+      // Fail open — never block a legitimate request due to our own bug
+      console.warn("[rate-limit] unexpected error, allowing request:", err);
+      return { allowed: true };
+    }
+    console.warn("[rate-limit] unexpected error, denying request (fail-closed):", err);
+    return {
+      allowed: false,
+      response: NextResponse.json(
+        {
+          ok: false,
+          error: "rate_limit_unavailable",
+          message: "Сервис временно недоступен. Попробуйте позже.",
+          retryAfterSeconds: windowSeconds
+        },
+        {
+          status: 503,
+          headers: {
+            "Retry-After": String(windowSeconds),
+            "X-RateLimit-Limit": String(limit),
+            "X-RateLimit-Window": String(windowSeconds)
+          }
+        }
+      )
+    };
   }
 }
 

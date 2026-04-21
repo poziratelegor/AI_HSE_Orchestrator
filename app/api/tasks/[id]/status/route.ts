@@ -27,16 +27,27 @@ export async function PATCH(
     return ERRORS.INVALID_INPUT("Тело запроса должно быть валидным JSON.");
   }
 
-  const { status } = body as Record<string, unknown>;
+  const { status, expectedUpdatedAt } = body as Record<string, unknown>;
 
   if (typeof status !== "string" || !VALID_STATUSES.includes(status as TaskStatus)) {
     return ERRORS.INVALID_INPUT(`Недопустимый статус. Допустимые: ${VALID_STATUSES.join(", ")}.`);
   }
 
   // 3. Update
-  const result = await updateTaskStatus(id, user.id, status as TaskStatus);
+  const result = await updateTaskStatus(
+    id,
+    user.id,
+    status as TaskStatus,
+    typeof expectedUpdatedAt === "string" ? expectedUpdatedAt : undefined
+  );
 
   if (!result.ok) {
+    if (result.code === "conflict") {
+      return NextResponse.json(
+        { ok: false, error: "conflict", message: result.error },
+        { status: 409 }
+      );
+    }
     console.error("[api/tasks/[id]/status] update failed:", result.error);
     return NextResponse.json(
       { ok: false, error: "update_failed", message: result.error },
@@ -44,5 +55,5 @@ export async function PATCH(
     );
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, updatedAt: result.updatedAt });
 }

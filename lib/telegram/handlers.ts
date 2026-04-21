@@ -14,6 +14,7 @@
 import { orchestrate } from "@/lib/orchestrator/router";
 import { getOpenAIClient } from "@/lib/ai/client";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { cacheSetIfAbsent } from "@/lib/cache/redis";
 import { processDocument } from "@/lib/services/documents/ingestion";
 import { checkRateLimit } from "@/lib/api/rate-limit";
 import {
@@ -105,13 +106,24 @@ const MAX_AUDIO_SIZE = 25 * 1024 * 1024; // 25 МБ — лимит Whisper API
 const MAX_DOCUMENT_SIZE = 20 * 1024 * 1024; // 20 МБ — наш лимит на upload
 const WHISPER_TIMEOUT_MS = 60_000;
 const MAX_TEXT_INPUT = 15_000; // символов — защита от DoS токенов LLM
+const DOC_DAILY_LIMIT = 10;
+const DOC_MONTHLY_BYTES_LIMIT = 500 * 1024 * 1024; // 500 MB
 
 // Rate-limit: одинаковый per chatId для привязанных и непривязанных.
-// 30 сообщений/мин на chat_id — достаточно для нормального пользования,
-// достаточно мало чтобы не слить OpenAI-баланс при абузе.
-const TG_RATE_LIMIT = { limit: 30, windowSeconds: 60, action: "telegram_chat" };
-// Аудио/документы — дорогие, отдельный жёсткий лимит на минуту.
-const TG_HEAVY_RATE_LIMIT = { limit: 5, windowSeconds: 60, action: "telegram_heavy" };
+// 30 запросов/час на chat_id.
+const TG_RATE_LIMIT = {
+  limit: 30,
+  windowSeconds: 60 * 60,
+  action: "telegram_chat",
+  failOpen: false,
+} as const;
+// Голосовые/аудио/видео-кружки — дорогие, отдельный лимит 5/час.
+const TG_VOICE_RATE_LIMIT = {
+  limit: 5,
+  windowSeconds: 60 * 60,
+  action: "telegram_voice",
+  failOpen: false,
+} as const;
 
 const SUPPORTED_DOC_MIME = new Set([
   "application/pdf",
@@ -166,13 +178,16 @@ const MSG = {
     "",
     "Команда /link — подробности.",
   ].join("\n"),
-  RATE_LIMITED: "⚠️ Слишком много сообщений. Подождите минуту и попробуйте ещё раз.",
-  RATE_LIMITED_HEAVY: "⚠️ Слишком много голосовых/файлов за минуту. Подождите и попробуйте снова.",
+  RATE_LIMITED: "⚠️ Слишком много сообщений. Лимит: 30 запросов в час. Попробуйте позже.",
+  RATE_LIMITED_HEAVY: "⚠️ Слишком много голосовых за час. Лимит: 5 голосовых/аудио в час.",
+  TEMP_UNAVAILABLE: "⚠️ Сервис временно недоступен. Попробуйте позже.",
   TEXT_TOO_LONG: `⚠️ Слишком длинное сообщение (лимит ${15_000} символов). Разбейте на несколько частей.`,
   PROCESSING: "⏳ Обрабатываю запрос...",
   VOICE_TOO_BIG: "⚠️ Аудио слишком большое (лимит 25 МБ). Попробуйте записать короче.",
   VOICE_DOWNLOAD_FAIL: "⚠️ Не удалось скачать аудио. Попробуйте ещё раз.",
   TRANSCRIBE_FAIL: "⚠️ Не удалось распознать аудио. Попробуйте написать текстом.",
+  FORWARDED_MEDIA_FAIL:
+    "⚠️ Не удалось обработать пересланное аудио/голосовое (invalid file_id). Перешлите файл ещё раз или отправьте напрямую.",
   GENERAL_ERROR: "⚠️ Произошла ошибка при обработке запроса. Попробуйте позже.",
   EMPTY_TEXT: "Напишите задачу текстом, отправьте голосовое сообщение или прикрепите файл. Для справки — /start.",
   PHOTO_NOT_SUPPORTED:
@@ -185,7 +200,48 @@ const MSG = {
   DOC_DONE: (name: string) =>
     `✅ Документ «${name}» добавлен. Теперь можно задавать вопросы по нему — например: «что говорилось про X в моих материалах?»`,
   DOC_FAIL: "⚠️ Не удалось обработать документ. Попробуйте загрузить через сайт.",
+  DOC_DAILY_QUOTA:
+    "⚠️ Достигнут дневной лимит документов (10/день). Попробуйте снова завтра.",
+  DOC_MONTHLY_QUOTA:
+    "⚠️ Достигнут месячный лимит объёма документов (500 MB/месяц).",
 };
+
+async function ensureDocumentQuota(userId: string, incomingBytes: number): Promise<{
+  ok: boolean;
+  reason?: "daily_limit" | "monthly_limit";
+}> {
+  const supabase = getSupabaseServerClient();
+  const now = new Date();
+  const dayStart = new Date(now);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+
+  const { count, error: countErr } = await supabase
+    .from("documents")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .gte("created_at", dayStart.toISOString());
+  if (!countErr && (count ?? 0) >= DOC_DAILY_LIMIT) {
+    return { ok: false, reason: "daily_limit" };
+  }
+
+  const { data, error: monthErr } = await supabase
+    .from("documents")
+    .select("file_size_bytes")
+    .eq("user_id", userId)
+    .gte("created_at", monthStart.toISOString());
+  if (!monthErr) {
+    const currentBytes = (data ?? []).reduce((sum, row) => {
+      const bytes = (row as { file_size_bytes?: number | null }).file_size_bytes ?? 0;
+      return sum + bytes;
+    }, 0);
+    if (currentBytes + Math.max(0, incomingBytes) > DOC_MONTHLY_BYTES_LIMIT) {
+      return { ok: false, reason: "monthly_limit" };
+    }
+  }
+
+  return { ok: true };
+}
 
 // ─── Upsert telegram user ────────────────────────────────────────────────────
 
@@ -333,11 +389,17 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   const chatId = message.chat.id;
   const from = message.from;
 
+  // ─── Dedup webhook retries (best-effort) ──────────────────────────────────
+  const updateDedup = await cacheSetIfAbsent(`tg:update:${tgUpdate.update_id}`, "1", 60 * 60 * 24);
+  if (updateDedup === false) return { ok: true };
+  const messageDedup = await cacheSetIfAbsent(`tg:message:${chatId}:${message.message_id}`, "1", 60 * 60 * 24);
+  if (messageDedup === false) return { ok: true };
+
   // ─── Rate-limit по chat_id (до любой дорогой работы) ─────────────────────
   const rlKey = `tg:${chatId}`;
   const rl = await checkRateLimit(rlKey, TG_RATE_LIMIT);
   if (!rl.allowed) {
-    await sendMessage({ chatId, text: MSG.RATE_LIMITED });
+    await sendMessage({ chatId, text: rl.response.status === 429 ? MSG.RATE_LIMITED : MSG.TEMP_UNAVAILABLE });
     return { ok: true };
   }
 
@@ -393,12 +455,6 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
 
   // ─── Документ → ingestion в RAG ──────────────────────────────────────────
   if (message.document) {
-    // Дополнительный rate-limit для дорогих операций
-    const rlHeavy = await checkRateLimit(rlKey, TG_HEAVY_RATE_LIMIT);
-    if (!rlHeavy.allowed) {
-      await sendMessage({ chatId, text: MSG.RATE_LIMITED_HEAVY });
-      return { ok: true };
-    }
     if (message.document.file_size && message.document.file_size > MAX_DOCUMENT_SIZE) {
       await sendMessage({ chatId, text: MSG.DOC_TOO_BIG });
       return { ok: true };
@@ -409,6 +465,15 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
     const isPdf = mime === "application/pdf" || fname.endsWith(".pdf");
     if (!SUPPORTED_DOC_MIME.has(mime) && !isText && !isPdf) {
       await sendMessage({ chatId, text: MSG.DOC_UNSUPPORTED });
+      return { ok: true };
+    }
+
+    const quota = await ensureDocumentQuota(userId, message.document.file_size ?? 0);
+    if (!quota.ok) {
+      await sendMessage({
+        chatId,
+        text: quota.reason === "daily_limit" ? MSG.DOC_DAILY_QUOTA : MSG.DOC_MONTHLY_QUOTA,
+      });
       return { ok: true };
     }
 
@@ -443,9 +508,12 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   // Аудио-ветки — дорогие, требуем heavy rate-limit.
   const hasAudio = !!(message.voice || message.audio || message.video_note);
   if (hasAudio) {
-    const rlHeavy = await checkRateLimit(rlKey, TG_HEAVY_RATE_LIMIT);
+    const rlHeavy = await checkRateLimit(rlKey, TG_VOICE_RATE_LIMIT);
     if (!rlHeavy.allowed) {
-      await sendMessage({ chatId, text: MSG.RATE_LIMITED_HEAVY });
+      await sendMessage({
+        chatId,
+        text: rlHeavy.response.status === 429 ? MSG.RATE_LIMITED_HEAVY : MSG.TEMP_UNAVAILABLE,
+      });
       return { ok: true };
     }
   }
@@ -459,7 +527,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
     await sendChatAction(chatId, "typing");
     const t = await transcribeFile(message.voice.file_id, message.voice.mime_type || "audio/ogg", "voice.ogg");
     if (!t) {
-      await sendMessage({ chatId, text: MSG.TRANSCRIBE_FAIL });
+      await sendMessage({ chatId, text: isForwardedMedia(message) ? MSG.FORWARDED_MEDIA_FAIL : MSG.TRANSCRIBE_FAIL });
       return { ok: true };
     }
     inputText = t;
@@ -479,7 +547,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
       message.audio.file_name || "audio.mp3"
     );
     if (!t) {
-      await sendMessage({ chatId, text: MSG.TRANSCRIBE_FAIL });
+      await sendMessage({ chatId, text: isForwardedMedia(message) ? MSG.FORWARDED_MEDIA_FAIL : MSG.TRANSCRIBE_FAIL });
       return { ok: true };
     }
     inputText = t;
@@ -495,7 +563,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
     await sendChatAction(chatId, "typing");
     const t = await transcribeFile(message.video_note.file_id, "video/mp4", "video_note.mp4");
     if (!t) {
-      await sendMessage({ chatId, text: MSG.TRANSCRIBE_FAIL });
+      await sendMessage({ chatId, text: isForwardedMedia(message) ? MSG.FORWARDED_MEDIA_FAIL : MSG.TRANSCRIBE_FAIL });
       return { ok: true };
     }
     inputText = t;
@@ -562,4 +630,9 @@ async function runOrchestrate(
 // Минимальное экранирование для inline-кода (Markdown legacy)
 function escapeMd(s: string): string {
   return s.replace(/([`*_\[])/g, "\\$1");
+}
+
+function isForwardedMedia(message: TelegramMessage): boolean {
+  const m = message as TelegramMessage & Record<string, unknown>;
+  return Boolean(m.forward_origin || m.forward_from || m.forward_date || m.forward_from_chat);
 }

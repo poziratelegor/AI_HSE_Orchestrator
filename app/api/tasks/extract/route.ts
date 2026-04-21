@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
+import { getSupabaseServerClient, getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
 import { runTaskExtractor } from "@/lib/services/planning/tasks";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/api/rate-limit";
+import { getProfile, isProfileComplete } from "@/lib/supabase/profile";
 
 const MAX_INPUT_LENGTH = 15_000;
 
@@ -10,6 +11,15 @@ export async function POST(request: Request) {
   // 1. Auth check
   const { user } = await getSupabaseUserFromRequest(request);
   if (!user) return ERRORS.UNAUTHORIZED();
+
+  // 1.1 Profile gate: task/letter workflows доступны только с заполненным профилем
+  const supabase = getSupabaseServerClient();
+  const profile = await getProfile(user.id, supabase);
+  if (!isProfileComplete(profile)) {
+    return ERRORS.INVALID_INPUT(
+      "Перед извлечением задач заполните профиль: ФИО, факультет и курс."
+    );
+  }
 
   // 2. Rate-limit
   const rl = await checkRateLimit(user.id, RATE_LIMITS.orchestrate);
@@ -42,4 +52,3 @@ export async function POST(request: Request) {
     return ERRORS.INTERNAL("Не удалось извлечь задачи.");
   }
 }
-

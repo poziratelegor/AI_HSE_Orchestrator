@@ -87,6 +87,23 @@ export async function cacheSet(
 }
 
 /**
+ * SET key only if absent (NX) with EX ttl.
+ * Returns:
+ *  - true  -> key was set
+ *  - false -> key already exists
+ *  - null  -> Redis unavailable/error
+ */
+export async function cacheSetIfAbsent(
+  key: string,
+  value: string,
+  ttlSeconds: number
+): Promise<boolean | null> {
+  const result = await redisCommand(["SET", key, value, "EX", ttlSeconds, "NX"]);
+  if (result === null || result === undefined) return null;
+  return String(result).toUpperCase() === "OK";
+}
+
+/**
  * DEL a key from the cache.
  * Silently no-ops if Redis is unavailable.
  */
