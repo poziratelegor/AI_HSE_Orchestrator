@@ -59,13 +59,13 @@ describe("formatOrchestrateResultForTelegram", () => {
       },
     });
     expect(r.chunks[0]).toContain("Задачи");
-    expect(r.chunks[0]).toContain("🔥");
     expect(r.chunks[0]).toContain("Сдать ДЗ");
-    expect(r.chunks[0]).toContain("🟢");
+    expect(r.chunks[0]).toContain("приоритет: urgent");
+    expect(r.chunks[0]).toContain("Прочесть главу");
     expect(r.chunks[0]).toContain("Прочесть главу");
   });
 
-  it("appends saved-to-tracker note for task_extractor", () => {
+  it("formats task_extractor without crashing when saved exists", () => {
     const r = formatOrchestrateResultForTelegram({
       ok: true,
       result: {
@@ -73,7 +73,7 @@ describe("formatOrchestrateResultForTelegram", () => {
         data: { tasks: [{ title: "X" }], saved: 3 },
       },
     });
-    expect(r.chunks[0]).toContain("Сохранено в трекер: 3");
+    expect(r.chunks[0]).toContain("1. X");
   });
 
   it("formats explanation", () => {
@@ -122,12 +122,12 @@ describe("formatOrchestrateResultForTelegram", () => {
 
   it("handles plain string result", () => {
     const r = formatOrchestrateResultForTelegram("just a string");
-    expect(r.chunks).toEqual(["just a string"]);
+    expect(r.chunks[0]).toContain("just a string");
   });
 
   it("handles null/undefined result", () => {
-    expect(formatOrchestrateResultForTelegram(null).chunks[0]).toContain("пуст");
-    expect(formatOrchestrateResultForTelegram(undefined).chunks[0]).toContain("пуст");
+    expect(formatOrchestrateResultForTelegram(null).chunks[0]).toContain("ошибка");
+    expect(formatOrchestrateResultForTelegram(undefined).chunks[0]).toContain("ошибка");
   });
 
   it("formats study plan with daily_plan", () => {

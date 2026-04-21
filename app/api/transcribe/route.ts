@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getOpenAIClient } from "@/lib/ai/client";
 import { getSupabaseServerClient, getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { ERRORS } from "@/lib/api/helpers";
+import { trackEvent } from "@/lib/analytics/events";
+import { ANALYTICS_EVENTS } from "@/lib/constants/analytics";
 
 export async function POST(request: Request) {
   // 1. Auth check
@@ -31,6 +33,7 @@ export async function POST(request: Request) {
   }
 
   // 3. Получить аудиоблоб
+  const startedAt = Date.now();
   let audioBlob: Blob;
   let filename = "audio.mp3";
 
@@ -106,6 +109,17 @@ export async function POST(request: Request) {
 
     clearTimeout(timeout);
 
+    void trackEvent(ANALYTICS_EVENTS.TRANSCRIBE_SUCCESS, {
+      userId: user.id,
+      channel: "web",
+      workflow: "transcribe_url_or_document",
+      durationMs: Date.now() - startedAt,
+      meta: {
+        source: documentId ? "document" : "audio_url",
+        hasDocumentId: Boolean(documentId)
+      }
+    });
+
     return NextResponse.json({
       ok: true,
       transcript: transcription.text,
@@ -116,6 +130,18 @@ export async function POST(request: Request) {
 
     const isAbort =
       err instanceof Error && (err.name === "AbortError" || err.message.includes("abort"));
+
+    void trackEvent(ANALYTICS_EVENTS.TRANSCRIBE_ERROR, {
+      userId: user.id,
+      channel: "web",
+      workflow: "transcribe_url_or_document",
+      durationMs: Date.now() - startedAt,
+      errorCode: isAbort ? "timeout" : "whisper_error",
+      meta: {
+        source: documentId ? "document" : "audio_url",
+        message: err instanceof Error ? err.message : "Unknown transcribe error"
+      }
+    });
 
     return NextResponse.json(
       {

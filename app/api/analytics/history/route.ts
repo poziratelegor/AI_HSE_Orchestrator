@@ -1,52 +1,80 @@
 import { NextResponse } from "next/server";
 import { ERRORS } from "@/lib/api/helpers";
-import { getSupabaseUserFromRequest, getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseRouteClient, getSupabaseUserFromRequest } from "@/lib/supabase/server";
 
-type RunRow = {
-  input_text: string | null;
-  status: string | null;
-  selected_workflow: string | null;
-  created_at: string | null;
+const DEFAULT_LIMIT = 5;
+const MAX_LIMIT = 20;
+
+type AnalyticsHistoryRow = {
+  id: string;
+  event_name: string;
+  created_at: string;
+  meta?: { queryPreview?: string } | null;
 };
 
-function mapStatus(status: string | null): "Готово" | "Ошибка" | "Уточнение" | "Маршрут" {
-  if (status === "completed") return "Готово";
-  if (status === "failed") return "Ошибка";
-  if (status === "clarification") return "Уточнение";
-  return "Маршрут";
+function mapStatus(eventName: string): "Готово" | "Ошибка" | "В обработке" {
+  if (eventName === "orchestrate_error") return "Ошибка";
+  if (eventName === "orchestrate_success" || eventName === "orchestrate_fallback") return "Готово";
+  return "В обработке";
 }
 
 export async function GET(request: Request) {
   const { user } = await getSupabaseUserFromRequest(request);
   if (!user) return ERRORS.UNAUTHORIZED();
 
-  const url = new URL(request.url);
-  const rawLimit = Number(url.searchParams.get("limit") ?? 6);
-  const limit = Number.isFinite(rawLimit) ? Math.min(20, Math.max(1, Math.floor(rawLimit))) : 6;
+  const { searchParams } = new URL(request.url);
+  const rawLimit = Number.parseInt(searchParams.get("limit") ?? `${DEFAULT_LIMIT}`, 10);
+  const limit = Number.isFinite(rawLimit)
+    ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT)
+    : DEFAULT_LIMIT;
 
   try {
-    const supabase = getSupabaseServerClient();
+    const supabase = await getSupabaseRouteClient();
     const { data, error } = await supabase
-      .from("orchestrator_runs")
-      .select("input_text, status, selected_workflow, created_at")
+      .from("analytics_events")
+      .select("id,event_name,created_at,meta")
       .eq("user_id", user.id)
-      .eq("channel", "web")
+      .in("event_name", ["orchestrate_success", "orchestrate_fallback", "orchestrate_error"])
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (error) return ERRORS.INTERNAL("Не удалось загрузить историю запросов.");
+    if (error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "analytics_temporarily_unavailable",
+          message: "Временная ошибка чтения аналитики. Попробуйте обновить страницу через несколько секунд.",
+          items: []
+        },
+        { status: 503 }
+      );
+    }
 
-    const items = ((data ?? []) as RunRow[])
-      .filter((row) => typeof row.input_text === "string" && row.input_text.trim().length > 0)
-      .map((row) => ({
-        text: (row.input_text ?? "").trim(),
-        status: mapStatus(row.status),
-        workflow: row.selected_workflow,
-        createdAt: row.created_at ?? undefined
-      }));
+    if (!data || data.length === 0) {
+      return NextResponse.json({
+        ok: true,
+        message: "События пока не найдены.",
+        items: []
+      });
+    }
+
+    const items = (data as AnalyticsHistoryRow[]).map((row) => ({
+      id: row.id,
+      text: row.meta?.queryPreview?.trim() || "Запрос без текста",
+      status: mapStatus(row.event_name),
+      createdAt: row.created_at
+    }));
 
     return NextResponse.json({ ok: true, items });
   } catch {
-    return ERRORS.INTERNAL("Не удалось загрузить историю запросов.");
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "analytics_temporarily_unavailable",
+        message: "Временная ошибка чтения аналитики. Попробуйте обновить страницу через несколько секунд.",
+        items: []
+      },
+      { status: 503 }
+    );
   }
 }

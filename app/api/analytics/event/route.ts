@@ -44,12 +44,15 @@ export async function POST(request: Request) {
 
   void trackEvent(eventName as AnalyticsEventName, {
     userId: user.id,
-    channel: channel as AnalyticsChannel | undefined,
-    workflow: typeof workflow === "string" ? workflow : undefined,
+    channel: (channel as AnalyticsChannel | undefined) ?? "web",
+    workflow: typeof workflow === "string" && workflow.trim().length > 0 ? workflow : "custom_event",
     sessionId: typeof sessionId === "string" ? sessionId : undefined,
     durationMs: typeof durationMs === "number" ? durationMs : undefined,
     errorCode: typeof errorCode === "string" ? errorCode : undefined,
-    meta: meta && typeof meta === "object" ? (meta as Record<string, unknown>) : undefined
+    meta: {
+      source: "api_analytics_event",
+      ...(meta && typeof meta === "object" ? (meta as Record<string, unknown>) : {})
+    }
   });
 
   return NextResponse.json({

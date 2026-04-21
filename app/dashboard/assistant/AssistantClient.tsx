@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { SectionCard, StatusBadge, EmptyState, InlineAlert, Spinner } from "@/components/dashboard/ui";
+import { SectionCard, InlineAlert } from "@/components/dashboard/ui";
 import { HowItWorks } from "@/components/dashboard/HowItWorks";
 import { WorkflowPicker } from "@/components/dashboard/WorkflowPicker";
 import { Markdown } from "@/components/dashboard/Markdown";
@@ -9,6 +9,8 @@ import { ResultBlock } from "@/components/dashboard/ResultBlock";
 import type { CitationSource } from "@/components/dashboard/Citation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
+import { normalizeOrchestrateResult } from "@/lib/orchestrator/normalize-result";
+import { RecentPromptsPanel, type RecentPrompt } from "@/components/dashboard/RecentPromptsPanel";
 
 const quickScenarios = [
   "Подготовить официальное письмо",
@@ -22,155 +24,6 @@ const examples = [
   "Выдели ключевые тезисы из методички по статистике.",
   "Собери план подготовки к экзамену за 10 дней."
 ];
-
-const backupPrompts = [
-  "Если сеть нестабильна: кратко перечисли 3 шага решения задачи и 1 пример.",
-  "Если API OpenAI временно недоступен: верни skeleton-ответ с разделами «Черновик», «Что уточнить», «Следующий шаг»."
-];
-
-type HistoryPrompt = {
-  text: string;
-  status: "Готово" | "Ошибка" | "Уточнение" | "Маршрут";
-  workflow?: string | null;
-  createdAt?: string;
-};
-
-type ResultView = {
-  /** Главный текст ответа — то, что пользователь хочет видеть и копировать */
-  text: string;
-  /** Опциональный заголовок ("Письмо", "Конспект", ...) */
-  title?: string;
-  /** Опциональный subtitle (тема письма, summary) */
-  subtitle?: string;
-};
-
-function formatStudyPlan(data: Record<string, unknown>): string | null {
-  if (!Array.isArray(data.daily_plan) || data.daily_plan.length === 0) return null;
-
-  const goal = typeof data.goal === "string" && data.goal.trim() ? data.goal.trim() : "Учебный план";
-  const totalDays =
-    typeof data.total_days === "number" && Number.isFinite(data.total_days)
-      ? data.total_days
-      : data.daily_plan.length;
-
-  const planLines = data.daily_plan.map((item, index) => {
-    if (typeof item === "string") return `${index + 1}. ${item}`;
-
-    const row = item as Record<string, unknown>;
-    const day = typeof row.day === "number" ? `День ${row.day}` : `День ${index + 1}`;
-    const date = typeof row.date === "string" && row.date.trim() ? ` (${row.date})` : "";
-    const theme = typeof row.theme === "string" && row.theme.trim() ? row.theme : "Тема не указана";
-    const duration =
-      typeof row.duration_hours === "number" && Number.isFinite(row.duration_hours)
-        ? ` · ${row.duration_hours} ч`
-        : "";
-
-    const tasks =
-      Array.isArray(row.tasks) && row.tasks.length > 0
-        ? row.tasks.map((t) => `   - ${typeof t === "string" ? t : JSON.stringify(t)}`).join("\n")
-        : "   - Без уточнённых задач";
-
-    return `${day}${date}: ${theme}${duration}\n${tasks}`;
-  });
-
-  const resources =
-    Array.isArray(data.resources) && data.resources.length > 0
-      ? `\n\nРесурсы:\n${data.resources.map((r) => `- ${typeof r === "string" ? r : JSON.stringify(r)}`).join("\n")}`
-      : "";
-
-  const tips =
-    Array.isArray(data.tips) && data.tips.length > 0
-      ? `\n\nСоветы:\n${data.tips.map((t) => `- ${typeof t === "string" ? t : JSON.stringify(t)}`).join("\n")}`
-      : "";
-
-  return `${goal} (${totalDays} дн.)\n\n${planLines.join("\n\n")}${resources}${tips}`.trim();
-}
-
-function pickFromData(data: Record<string, unknown>): string | null {
-  // Письмо: subject + body
-  if (typeof data.body === "string" && data.body.trim()) return data.body;
-  if (typeof data.summary === "string" && data.summary.trim()) return data.summary;
-  if (typeof data.explanation === "string" && data.explanation.trim()) return data.explanation;
-  if (typeof data.answer === "string" && data.answer.trim()) return data.answer;
-  if (typeof data.text === "string" && data.text.trim()) return data.text;
-  if (typeof data.content === "string" && data.content.trim()) return data.content;
-  if (typeof data.markdown === "string" && data.markdown.trim()) return data.markdown;
-
-  // План / задачи / список — массивы
-  if (Array.isArray(data.tasks) && data.tasks.length > 0) {
-    return data.tasks
-      .map((t, i) => {
-        if (typeof t === "string") return `${i + 1}. ${t}`;
-        const r = t as Record<string, unknown>;
-        const title = (r.title ?? r.name ?? "Задача") as string;
-        const due = r.due_date || r.dueDate;
-        const prio = r.priority;
-        const extras = [due ? `до ${due}` : null, prio ? `приоритет: ${prio}` : null].filter(Boolean).join(", ");
-        return `${i + 1}. ${title}${extras ? ` (${extras})` : ""}`;
-      })
-      .join("\n");
-  }
-  if (Array.isArray(data.items) && data.items.length > 0) {
-    return data.items.map((x, i) => `${i + 1}. ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n");
-  }
-  if (Array.isArray(data.points) && data.points.length > 0) {
-    return data.points.map((x, i) => `${i + 1}. ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n");
-  }
-
-  // Учебный план (study_plan workflow)
-  const studyPlan = formatStudyPlan(data);
-  if (studyPlan) return studyPlan;
-
-  return null;
-}
-
-function renderResult(result: unknown): ResultView {
-  if (result === null || result === undefined) return { text: "" };
-  if (typeof result === "string") return { text: result };
-
-  const obj = result as Record<string, unknown>;
-
-  // Ошибочный ответ
-  if (obj.ok === false && typeof obj.message === "string") {
-    return { text: obj.message, title: "Ошибка" };
-  }
-
-  // Орхестратор оборачивает: { ok, intent, result: {...} }
-  // Внутри result.data лежат поля workflow.
-  const inner =
-    obj.result && typeof obj.result === "object"
-      ? (obj.result as Record<string, unknown>)
-      : obj;
-
-  const data =
-    inner.data && typeof inner.data === "object"
-      ? (inner.data as Record<string, unknown>)
-      : inner;
-
-  const workflow = (inner.workflow ?? obj.intent) as string | undefined;
-  const summary = typeof inner.summary === "string" ? inner.summary : undefined;
-  const subject = typeof data.subject === "string" ? data.subject : undefined;
-
-  const title = (() => {
-    switch (workflow) {
-      case "letter_generator": return "Письмо";
-      case "task_extractor":   return "Задачи";
-      case "study_plan":       return "Учебный план";
-      case "explain_this":     return "Объяснение";
-      case "cheat_sheet":      return "Шпаргалка";
-      case "quiz_generator":   return "Тест";
-      case "lecture_insight":  return "Конспект лекции";
-      case "rag_qa":           return "Ответ по документам";
-      default:                 return "Результат";
-    }
-  })();
-
-  const text = pickFromData(data);
-  if (text) return { text, title, subtitle: subject ?? summary };
-
-  // Fallback — что-то нестандартное; покажем JSON, но хотя бы не сломаемся.
-  return { text: JSON.stringify(inner, null, 2), title };
-}
 
 /** Three-dot typing animation indicator */
 function TypingIndicator() {
@@ -203,8 +56,8 @@ export default function AssistantClient() {
   const [streamedText, setStreamedText] = useState<string>("");
   const [streamCitations, setStreamCitations] = useState<CitationSource[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [recentPrompts, setRecentPrompts] = useState<HistoryPrompt[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
+  const [recentPrompts, setRecentPrompts] = useState<RecentPrompt[]>([]);
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -322,6 +175,7 @@ export default function AssistantClient() {
   const handleSubmit = async (overrideQuery?: string) => {
     const text = (overrideQuery ?? query).trim();
     if (!text) return;
+    const optimisticId = `optimistic-${Date.now()}`;
 
     setIsLoading(true);
     setError(null);
@@ -329,6 +183,7 @@ export default function AssistantClient() {
     setStreamedText("");
     setStreamCitations([]);
     setShowWorkflowPicker(false);
+    setRecentPrompts((prev) => [{ id: optimisticId, text, status: "В обработке", optimistic: true }, ...prev].slice(0, 5));
 
     try {
       const supabase = getSupabaseBrowserClient();
@@ -368,6 +223,7 @@ export default function AssistantClient() {
         setClarificationQuestion(data.clarificationQuestion ?? null);
         setShowWorkflowPicker(true);
         setResult(null);
+        setRecentPrompts((prev) => prev.map((item) => (item.id === optimisticId ? { ...item, status: "Готово" } : item)));
         return;
       }
 
@@ -376,21 +232,28 @@ export default function AssistantClient() {
       // RAG ответ — переключаемся на streaming
       if (data.intent === "rag_qa") {
         setResult(null);
-        void streamRagAnswer(text);
+        void streamRagAnswer(text, optimisticId);
       } else {
         setResult(payload);
+        setRecentPrompts((prev) =>
+          prev.map((item) => (item.id === optimisticId ? { ...item, status: "Готово", optimistic: false } : item))
+        );
         toast.success("Запрос обработан успешно");
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Сетевая ошибка.";
       setError(msg);
+      setRecentPrompts((prev) =>
+        prev.map((item) => (item.id === optimisticId ? { ...item, status: "Ошибка", optimistic: false } : item))
+      );
       toast.error(msg);
     } finally {
       setIsLoading(false);
+      setHistoryRefreshToken((prev) => prev + 1);
     }
   };
 
-  const streamRagAnswer = async (question: string) => {
+  const streamRagAnswer = async (question: string, optimisticId: string) => {
     setIsStreaming(true);
     setStreamedText("");
     setStreamCitations([]);
@@ -454,9 +317,15 @@ export default function AssistantClient() {
       }
 
       toast.success("Ответ готов");
+      setRecentPrompts((prev) =>
+        prev.map((item) => (item.id === optimisticId ? { ...item, status: "Готово", optimistic: false } : item))
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Сетевая ошибка";
       setError(msg);
+      setRecentPrompts((prev) =>
+        prev.map((item) => (item.id === optimisticId ? { ...item, status: "Ошибка", optimistic: false } : item))
+      );
       toast.error(msg);
     } finally {
       setIsStreaming(false);
@@ -627,7 +496,7 @@ export default function AssistantClient() {
 
             {/* Result */}
             {result !== null && !error && !isLoading && (() => {
-              const view = renderResult(result);
+              const view = normalizeOrchestrateResult(result);
               if (!view.text) return null;
               return (
                 <div className="mt-4">
@@ -676,58 +545,11 @@ export default function AssistantClient() {
       </div>
 
       <div className="animate-slide-in-right delay-150">
-        <SectionCard title="Недавние запросы" subtitle="История запросов текущей сессии.">
-          {historyLoading ? (
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <Spinner />
-              Загружаем историю…
-            </div>
-          ) : recentPrompts.length === 0 ? (
-            <EmptyState
-              title="История пока пуста"
-              description="После первых запросов здесь появятся последние сценарии и статусы."
-            />
-          ) : (
-            <div className="space-y-3">
-              {recentPrompts.map((item, i) => (
-                <div
-                  key={`${item.text}-${item.createdAt ?? i}`}
-                  className="animate-fade-in cursor-pointer rounded-xl border border-[var(--hse-border)] p-3 transition-all duration-200 hover:border-[var(--hse-blue)]/20 hover:bg-[var(--hse-light)]/20 hover:-translate-y-px"
-                  style={{ animationDelay: `${i * 80}ms` }}
-                  onClick={() => setQuery(item.text)}
-                >
-                  <p className="text-sm text-slate-800">{item.text}</p>
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <StatusBadge
-                      label={item.status}
-                      tone={item.status === "Готово" ? "success" : item.status === "Ошибка" ? "danger" : "warning"}
-                    />
-                    {item.workflow ? <span className="text-[11px] text-slate-400">{item.workflow}</span> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="mt-5 rounded-xl border border-dashed border-[var(--hse-border)] bg-[var(--hse-page-bg)] p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--hse-text-muted)]">
-              Резервные prompt&apos;ы
-            </p>
-            <ul className="mt-2 space-y-2">
-              {backupPrompts.map((prompt) => (
-                <li key={prompt}>
-                  <button
-                    type="button"
-                    onClick={() => setQuery(prompt)}
-                    className="w-full rounded-lg border border-[var(--hse-border)] bg-white px-2 py-1.5 text-left text-xs text-slate-700 transition hover:border-[var(--hse-blue)]/30 hover:bg-[var(--hse-light)]/30"
-                  >
-                    {prompt}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </SectionCard>
+        <RecentPromptsPanel
+          optimisticPrompts={recentPrompts}
+          refreshToken={historyRefreshToken}
+          onPromptSelect={setQuery}
+        />
       </div>
     </div>
   );

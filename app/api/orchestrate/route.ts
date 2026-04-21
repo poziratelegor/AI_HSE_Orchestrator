@@ -70,6 +70,7 @@ export async function POST(request: Request) {
         channel: requestChannel,
         durationMs,
         meta: {
+          queryPreview: text.trim().slice(0, 160),
           hasAttachments: Array.isArray(attachments) && attachments.length > 0,
           ok: Boolean((result as { ok?: unknown }).ok)
         }
@@ -85,6 +86,7 @@ export async function POST(request: Request) {
       durationMs: Date.now() - startedAt,
       errorCode: err instanceof Error ? err.name : "orchestrate_error",
       meta: {
+        queryPreview: text.trim().slice(0, 160),
         message: err instanceof Error ? err.message : "Unknown orchestrate error"
       }
     });
