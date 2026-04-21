@@ -21,6 +21,7 @@
 
 import type { StudentContext } from "@/lib/ai/student-context";
 import { renderStudentContextBlock } from "@/lib/ai/student-context";
+import { renderCurrentDateBlock, getCurrentDateContext } from "@/lib/ai/current-time";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REUSABLE BUILDING BLOCKS
@@ -145,6 +146,8 @@ export function buildRagQaPrompt(ctx?: StudentContext | null): string {
   return withStudent(ctx, [
     PERSONA,
     "",
+    renderCurrentDateBlock(),
+    "",
     "РОЛЬ: Ты отвечаешь на вопросы студента ТОЛЬКО на основе фрагментов документов из его базы знаний.",
     "",
     "ПРАВИЛА ОТВЕТА:",
@@ -192,11 +195,15 @@ export function buildLetterPrompt(ctx?: StudentContext | null): string {
   return withPersona([
     "РОЛЬ: Ты — ассистент для написания официальных академических писем на русском.",
     "",
+    renderCurrentDateBlock(),
+    "",
     "ДАННЫЕ СТУДЕНТА:",
     facts,
     "",
     "ВАЖНО: НИКОГДА не оставляй в письме плейсхолдеры вида [Ваше имя], [Ваш факультет], [Имя], [Дата]. ",
     "Если данных нет — формулируй обтекаемо («Студент бакалавриата», «на следующей неделе»), но без квадратных скобок.",
+    "Все относительные даты в просьбе студента («через неделю», «29.04», «послезавтра»)",
+    "разворачивай в конкретные даты на основе блока «ТЕКУЩИЕ ДАТА И ВРЕМЯ» выше.",
     "",
     "СТИЛЬ:",
     "- Строго официальный, вежливый, без фамильярности",
@@ -232,10 +239,16 @@ export function buildLetterPrompt(ctx?: StudentContext | null): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function buildTaskExtractorPrompt(today: string): string {
+  // today (YYYY-MM-DD) сохранён для обратной совместимости — но мы дополнительно
+  // показываем модели полный блок с днём недели и временем для лучшего разбора
+  // относительных дат.
+  const nowCtx = getCurrentDateContext();
   return withPersona([
     "РОЛЬ: Извлеки все задачи, дедлайны и обязательства из текста студента.",
     "",
-    `СЕГОДНЯ: ${today}`,
+    renderCurrentDateBlock(nowCtx),
+    "",
+    `Дополнительно (legacy): СЕГОДНЯ_ISO=${today}`,
     "",
     "ПРАВИЛА:",
     "1. Извлекай ТОЛЬКО явные задачи — не выдумывай и не добавляй «возможно нужно...»",
@@ -274,6 +287,8 @@ export function buildExplainPrompt(ctx?: StudentContext | null): string {
   return withPersona([
     "РОЛЬ: Объясняй сложные концепции максимально простыми словами.",
     "",
+    renderCurrentDateBlock(),
+    "",
     courseHint,
     "",
     "ПРАВИЛА ОБЪЯСНЕНИЯ:",
@@ -306,6 +321,8 @@ export function buildExplainPrompt(ctx?: StudentContext | null): string {
 export function buildCheatSheetPrompt(ctx?: StudentContext | null): string {
   return withPersona([
     "РОЛЬ: Создавай плотные, готовые к печати шпаргалки по учебным темам.",
+    "",
+    renderCurrentDateBlock(),
     "",
     "ПРАВИЛА:",
     "1. Шпаргалка = плотная информация без воды. Каждое слово работает.",
@@ -377,7 +394,9 @@ export function buildStudyPlanPrompt(today: string, ctx?: StudentContext | null)
   return withPersona([
     "РОЛЬ: Составляй реалистичные учебные планы подготовки.",
     "",
-    `СЕГОДНЯ: ${today}`,
+    renderCurrentDateBlock(),
+    "",
+    `Дополнительно (legacy): СЕГОДНЯ_ISO=${today}`,
     courseHint,
     "",
     "ПРАВИЛА:",
@@ -411,6 +430,8 @@ export function buildLectureInsightPrompt(): string {
   return withPersona([
     "РОЛЬ: Анализируй текст лекции и извлекай структурированную сводку.",
     "",
+    renderCurrentDateBlock(),
+    "",
     "ПРАВИЛА:",
     "1. topics: 3-7 основных тем лекции. Существительные/именные группы.",
     "2. terms: ключевые термины с определениями ИЗ ТЕКСТА (не из общих знаний)",
@@ -436,6 +457,8 @@ export function buildLectureInsightPrompt(): string {
 export function buildLectureNotesPrompt(): string {
   return withPersona([
     "РОЛЬ: По транскрипту лекции составь структурированный конспект для последующего изучения.",
+    "",
+    renderCurrentDateBlock(),
     "",
     "ПРАВИЛА:",
     "1. title: реальная тема лекции из текста, 3-8 слов",
