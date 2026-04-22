@@ -3,7 +3,7 @@
  *
  * Принимает raw update от Telegram webhook → определяет тип сообщения
  * (текст / голос / аудио / видео-кружок / документ) → upsert telegram_users
- * → опционально привязывает аккаунт через /start link_<code>
+ * → авторизует пользователя через FSM-поток (/start → email → ФИО)
  * → транскрибирует / сохраняет файл при необходимости
  * → вызывает orchestrate() и форматирует ответ.
  *
@@ -26,7 +26,6 @@ import {
   downloadTelegramFile,
 } from "@/lib/telegram/bot";
 import { formatOrchestrateResultForTelegram } from "@/lib/telegram/format";
-import { consumeLinkCode, parseStartLinkPayload } from "@/lib/telegram/link";
 import { getTelegramCtaLinks } from "@/lib/telegram/app-url";
 
 // ─── Telegram types (минимальное подмножество) ───────────────────────────────
@@ -108,6 +107,14 @@ type TelegramUpdate = {
   };
 };
 
+type TelegramFsmState = "idle" | "await_email" | "await_full_name" | "authorized";
+
+type TelegramUserAuthState = {
+  userId?: string;
+  fsmState: TelegramFsmState;
+  fsmContext: Record<string, unknown>;
+};
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_AUDIO_SIZE = 25 * 1024 * 1024; // 25 МБ — лимит Whisper API
@@ -158,33 +165,21 @@ const MSG = {
     "• Пришлите 📎 PDF/TXT/MD — я загружу его в вашу базу знаний",
     "",
     "*Команды:*",
-    "/link — привязать ваш аккаунт StudyFlow к этому Telegram",
+    "/start — вход по email и ФИО",
     "/help — эта справка",
   ].join("\n"),
-  LINK_HINT: [
-    "🔗 *Привязка аккаунта Telegram*",
-    "",
-    "Чтобы я сохранял ваши задачи в трекер и присылал напоминания о дедлайнах,",
-    "мне нужно связать ваш Telegram с аккаунтом StudyFlow AI:",
-    "",
-    "1. Откройте сайт → раздел *Профиль*",
-    "2. Нажмите кнопку *«Привязать Telegram»*",
-    "3. Перейдите по полученной ссылке",
-    "",
-    "После этого все задачи и письма из чата автоматически попадут в ваш дашборд.",
-  ].join("\n"),
-  LINK_OK: "✅ Аккаунт успешно привязан! Теперь я сохраняю ваши задачи и шлю напоминания о дедлайнах.",
-  LINK_NOT_FOUND: "⚠️ Код привязки не найден или уже использован. Сгенерируйте новый в /dashboard/profile.",
-  LINK_EXPIRED: "⚠️ Срок действия кода истёк (код живёт 5 минут). Сгенерируйте новый в профиле.",
+  ASK_EMAIL: "📧 Введите email, который вы использовали при регистрации на сайте StudyFlow AI.",
+  ASK_FULL_NAME:
+    "🧾 Теперь введите ваше ФИО *точно как в профиле*.\nФормат: `Иванов Иван Иванович`.",
+  AUTH_SUCCESS: "✅ Авторизация успешна! Теперь можете писать запрос в свободной форме.",
+  AUTH_NOT_FOUND: (signupUrl: string) => `⚠️ Запись не найдена. Сначала зарегистрируйтесь на сайте: ${signupUrl}`,
+  AUTH_RETRY: "⚠️ Неверный формат ввода. Попробуйте ещё раз.",
   NEED_LINK: [
     "🔒 *Доступ только для зарегистрированных пользователей.*",
     "",
-    "Чтобы пользоваться ассистентом, привяжите аккаунт StudyFlow AI:",
-    "1. Зарегистрируйтесь на сайте (если ещё не сделали)",
-    "2. Откройте *Профиль* → кнопка *«Привязать Telegram»*",
-    "3. Перейдите по полученной ссылке",
+    "Для входа отправьте /start и пройдите авторизацию (email + ФИО).",
     "",
-    "Команда /link — подробности.",
+    "Если аккаунта ещё нет — зарегистрируйтесь на сайте StudyFlow AI.",
   ].join("\n"),
   RATE_LIMITED: "⚠️ Слишком много сообщений. Лимит: 30 запросов в час. Попробуйте позже.",
   RATE_LIMITED_HEAVY: "⚠️ Слишком много голосовых за час. Лимит: 5 голосовых/аудио в час.",
@@ -200,7 +195,7 @@ const MSG = {
   EMPTY_TEXT: "Напишите задачу текстом, отправьте голосовое сообщение или прикрепите файл. Для справки — /start.",
   PHOTO_NOT_SUPPORTED:
     "📷 Я пока не умею читать содержимое фотографий. Если на снимке текст — пришлите его как PDF/TXT, я его проиндексирую.",
-  DOC_NEED_LINK: "📎 Чтобы загружать документы в вашу базу знаний, привяжите аккаунт командой /link.",
+  DOC_NEED_LINK: "📎 Чтобы загружать документы в вашу базу знаний, сначала пройдите авторизацию через /start.",
   DOC_TOO_BIG: "⚠️ Файл слишком большой (лимит 20 МБ).",
   DOC_UNSUPPORTED:
     "⚠️ Пока поддерживаются только PDF, TXT и MD. Остальные форматы — через раздел «Документы» на сайте.",
@@ -222,6 +217,14 @@ function buildTelegramInlineKeyboard() {
       { text: "Открыть профиль", url: links.profileUrl },
     ]],
   };
+}
+
+function normalizeComparableText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru-RU");
+}
+
+function isLikelyEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value.trim());
 }
 
 function buildTelegramActionKeyboard() {
@@ -312,19 +315,89 @@ async function upsertTelegramUser(from: TelegramUser): Promise<void> {
 
 // ─── Lookup linked Supabase userId ───────────────────────────────────────────
 
-async function getLinkedUserId(telegramUserId: number): Promise<string | undefined> {
+async function getTelegramAuthState(telegramUserId: number): Promise<TelegramUserAuthState> {
   try {
     const supabase = getSupabaseServerClient();
 
     const { data } = await supabase
       .from("telegram_users")
-      .select("user_id")
+      .select("user_id,fsm_state,fsm_context")
       .eq("telegram_user_id", String(telegramUserId))
       .single();
 
-    return (data as { user_id?: string } | null)?.user_id ?? undefined;
+    const row = data as {
+      user_id?: string | null;
+      fsm_state?: string | null;
+      fsm_context?: Record<string, unknown> | null;
+    } | null;
+
+    const rawState = row?.fsm_state ?? "idle";
+    const fsmState: TelegramFsmState =
+      rawState === "await_email" || rawState === "await_full_name" || rawState === "authorized"
+        ? rawState
+        : "idle";
+
+    return {
+      userId: row?.user_id ?? undefined,
+      fsmState,
+      fsmContext: row?.fsm_context ?? {},
+    };
   } catch {
-    return undefined;
+    return { fsmState: "idle", fsmContext: {} };
+  }
+}
+
+async function updateTelegramAuthState(
+  telegramUserId: number,
+  patch: Partial<{ userId: string | null; fsmState: TelegramFsmState; fsmContext: Record<string, unknown> }>
+): Promise<void> {
+  try {
+    const supabase = getSupabaseServerClient();
+    const payload: Record<string, unknown> = {};
+    if (patch.userId !== undefined) payload.user_id = patch.userId;
+    if (patch.fsmState !== undefined) payload.fsm_state = patch.fsmState;
+    if (patch.fsmContext !== undefined) payload.fsm_context = patch.fsmContext;
+
+    await supabase
+      .from("telegram_users")
+      .update(payload)
+      .eq("telegram_user_id", String(telegramUserId));
+  } catch (err) {
+    console.error("[telegram/updateAuthState] Error:", err instanceof Error ? err.message : err);
+  }
+}
+
+async function authorizeByEmailAndFullName(opts: {
+  telegramUserId: number;
+  email: string;
+  fullName: string;
+}): Promise<{ ok: boolean; userId?: string }> {
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data } = await supabase
+      .from("profiles")
+      .select("id, full_name, email")
+      .ilike("email", opts.email)
+      .limit(1)
+      .maybeSingle();
+
+    const row = data as { id: string; full_name?: string | null; email?: string | null } | null;
+    if (!row?.id || !row.full_name) return { ok: false };
+
+    const isMatch =
+      normalizeComparableText(row.email ?? "") === normalizeComparableText(opts.email) &&
+      normalizeComparableText(row.full_name) === normalizeComparableText(opts.fullName);
+    if (!isMatch) return { ok: false };
+
+    await updateTelegramAuthState(opts.telegramUserId, {
+      userId: row.id,
+      fsmState: "authorized",
+      fsmContext: {},
+    });
+    return { ok: true, userId: row.id };
+  } catch (err) {
+    console.error("[telegram/authorizeByEmailAndFullName] Error:", err instanceof Error ? err.message : err);
+    return { ok: false };
   }
 }
 
@@ -458,23 +531,10 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   if (from) void upsertTelegramUser(from);
 
   // ─── PUBLIC команды (доступны без привязки) ──────────────────────────────
-  // /start [link_<CODE>], /help, /link
+  // /start, /help, /link
   if (message.text?.startsWith("/start")) {
-    const code = parseStartLinkPayload(message.text);
-    if (code && from) {
-      const result = await consumeLinkCode(code, from.id, {
-        username: from.username,
-        first_name: from.first_name,
-        last_name: from.last_name,
-      });
-      if (result.ok) {
-        await sendMessage({ chatId, text: MSG.LINK_OK });
-        return { ok: true };
-      }
-      const reply =
-        result.reason === "expired" ? MSG.LINK_EXPIRED : MSG.LINK_NOT_FOUND;
-      await sendMessage({ chatId, text: reply });
-      return { ok: true };
+    if (from) {
+      await updateTelegramAuthState(from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
     }
     await sendMessage({
       chatId,
@@ -482,6 +542,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
       parseMode: "Markdown",
       replyMarkup: buildTelegramActionKeyboard(),
     });
+    await sendMessage({ chatId, text: MSG.ASK_EMAIL });
     return { ok: true };
   }
 
@@ -496,19 +557,63 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   }
 
   if (message.text?.startsWith("/link")) {
-    await sendMessage({
-      chatId,
-      text: withExplicitLinksFallback(MSG.LINK_HINT),
-      parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
-    });
+    if (from) {
+      await updateTelegramAuthState(from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
+    }
+    await sendMessage({ chatId, text: MSG.ASK_EMAIL });
     return { ok: true };
+  }
+
+  if (from && message.text) {
+    const authState = await getTelegramAuthState(from.id);
+    const text = message.text.trim();
+    const links = getTelegramCtaLinks();
+
+    if (authState.fsmState === "idle" || authState.fsmState === "await_email") {
+      if (!isLikelyEmail(text)) {
+        await sendMessage({ chatId, text: `${MSG.AUTH_RETRY}\n\n${MSG.ASK_EMAIL}` });
+        return { ok: true };
+      }
+
+      await updateTelegramAuthState(from.id, {
+        userId: null,
+        fsmState: "await_full_name",
+        fsmContext: { email: text.trim() },
+      });
+      await sendMessage({ chatId, text: MSG.ASK_FULL_NAME, parseMode: "Markdown" });
+      return { ok: true };
+    }
+
+    if (authState.fsmState === "await_full_name") {
+      const email = typeof authState.fsmContext.email === "string" ? authState.fsmContext.email : "";
+      if (!email || text.length < 5 || !text.includes(" ")) {
+        await sendMessage({ chatId, text: `${MSG.AUTH_RETRY}\n\n${MSG.ASK_FULL_NAME}`, parseMode: "Markdown" });
+        return { ok: true };
+      }
+
+      const auth = await authorizeByEmailAndFullName({
+        telegramUserId: from.id,
+        email,
+        fullName: text,
+      });
+      if (!auth.ok) {
+        await updateTelegramAuthState(from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
+        await sendMessage({ chatId, text: MSG.AUTH_NOT_FOUND(links.signupUrl) });
+        await sendMessage({ chatId, text: MSG.ASK_EMAIL });
+        return { ok: true };
+      }
+
+      await sendMessage({ chatId, text: MSG.AUTH_SUCCESS });
+      return { ok: true };
+    }
   }
 
   // ─── AUTH GATE: всё остальное — только для привязанных ───────────────────
   // Любой функционал (orchestrate/voice/document) стоит денег (OpenAI) и
   // имеет смысл только для известного userId. Без привязки — отказ.
-  const userId = from ? await getLinkedUserId(from.id) : undefined;
+  const authState = from ? await getTelegramAuthState(from.id) : undefined;
+  const userId =
+    authState?.fsmState === "authorized" && authState.userId ? authState.userId : undefined;
   if (!userId) {
     await sendMessage({
       chatId,
@@ -736,12 +841,10 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callbac
   }
 
   if (payload === "relink") {
-    await sendMessage({
-      chatId,
-      text: withExplicitLinksFallback(MSG.LINK_HINT),
-      parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
-    });
+    if (callback.from) {
+      await updateTelegramAuthState(callback.from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
+    }
+    await sendMessage({ chatId, text: MSG.ASK_EMAIL });
     return;
   }
 
