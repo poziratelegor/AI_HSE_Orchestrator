@@ -16,7 +16,7 @@ import {
   getScenarioBreakdown,
   getFunnelData
 } from "@/lib/analytics/metrics";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseRouteClient } from "@/lib/supabase/server";
 
 const insights = [
   "Сценарии официальной переписки остаются основным драйвером использования.",
@@ -26,7 +26,7 @@ const insights = [
 
 export default async function AnalyticsPage() {
   // ── Проверка доступа ──────────────────────────────────────────────────
-  const supabase = getSupabaseServerClient();
+  const supabase = await getSupabaseRouteClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
@@ -36,7 +36,12 @@ export default async function AnalyticsPage() {
     .eq("id", user.id)
     .single();
 
-  const role = (profile as { role?: string } | null)?.role;
+  const profileRole = (profile as { role?: string } | null)?.role;
+  const appMetaRole =
+    typeof user.app_metadata?.role === "string" ? user.app_metadata.role : null;
+  const userMetaRole =
+    typeof user.user_metadata?.role === "string" ? user.user_metadata.role : null;
+  const role = profileRole ?? appMetaRole ?? userMetaRole;
   if (role !== "admin") {
     return (
       <DashboardContainer>

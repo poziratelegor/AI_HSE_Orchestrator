@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { upsertProfile } from "@/lib/supabase/profile";
+import { buildAuthRedirectUrl } from "@/lib/supabase/redirect-url";
 import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 import {
   AuthShell,
@@ -169,10 +170,14 @@ function SignupForm() {
       program: program || null
     };
 
+    const redirectTo = buildAuthRedirectUrl(`/auth/callback?next=${encodeURIComponent(next)}`);
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: profilePayload }
+      options: {
+        data: profilePayload,
+        emailRedirectTo: redirectTo
+      }
     });
 
     if (signUpError) {
@@ -208,11 +213,10 @@ function SignupForm() {
   async function handleGoogleSignup() {
     setLoading(true);
     setError(null);
+    const redirectTo = buildAuthRedirectUrl(`/auth/callback?next=${encodeURIComponent(next)}`);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`
-      }
+      options: { redirectTo }
     });
     if (error) {
       setError(translateError(error.message));

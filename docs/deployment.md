@@ -94,6 +94,24 @@ vercel --prod
 
 Hobby-план: макс. 10 с. Pro-план: макс. 60 с.
 
+### Supabase Auth: критичные настройки email/magic-link
+
+Если не приходят письма подтверждения или magic-link «не работает», проверьте именно эти пункты:
+
+1. **Auth → URL Configuration**
+   - `Site URL`: канонический прод-домен (например, `https://ai-hse-orchestrator.vercel.app`).
+   - `Redirect URLs`: должны включать:
+     - `https://ai-hse-orchestrator.vercel.app/auth/callback`
+     - `https://ai-hse-orchestrator.vercel.app/callback`
+     - локальную разработку (`http://localhost:3000/auth/callback`, `http://localhost:3000/callback`)
+2. **Auth → Email**
+   - Включён провайдер email (Supabase default или custom SMTP).
+   - Нет блокировки/лимита на отправку в используемом плане.
+3. **Vercel env**
+   - `NEXT_PUBLIC_APP_URL` должен указывать на тот же канонический домен, что и `Site URL`.
+
+Важно: если пользователь открывает preview-домен Vercel, а Supabase настроен на прод-домен, сессия и redirect могут «расходиться» по разным origin.
+
 ---
 
 ## Миграции базы данных
