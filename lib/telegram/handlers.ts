@@ -529,23 +529,100 @@ async function setTelegramAuthState(telegramUserId: number, state: AuthFlowState
   }
 }
 
+function sanitizeSearchToken(value: string): string {
+  return value.replace(/[%_,]/g, " ").trim();
+}
+
+function isLikelyGroupToken(token: string): boolean {
+  const normalized = token.replace(/[.,;:]/g, "").trim();
+  if (!normalized) return false;
+
+  return /^[\p{L}]{2,8}-?\d{2,4}(?:-\d{1,3})?$/u.test(normalized) || /\d/.test(normalized) || /-/.test(normalized);
+}
+
+function parseProfileQuery(query: string): { namePart: string; groupPart: string; nameTokens: string[] } {
+  const tokens = query
+    .split(/\s+/)
+    .map((token) => token.replace(/[.,;:()\[\]{}]/g, "").trim())
+    .filter(Boolean);
+
+  const groupTokens = tokens.filter((token) => isLikelyGroupToken(token));
+  const nameTokens = tokens
+    .filter((token) => !groupTokens.includes(token))
+    .map((token) => sanitizeSearchToken(token))
+    .filter((token) => token.length > 1);
+
+  return {
+    namePart: nameTokens.join(" "),
+    groupPart: groupTokens.join(" "),
+    nameTokens,
+  };
+}
+
 async function findProfileMatches(query: string, from: TelegramUser): Promise<ReturnType<typeof rankProfileMatches>> {
   const supabase = getSupabaseServerClient();
   const normalizedQuery = query.trim();
   if (!normalizedQuery) return [];
 
-  const { data, error } = await supabase
+  const { namePart, groupPart, nameTokens } = parseProfileQuery(normalizedQuery);
+  console.info("[telegram/auth] profile search parts:", { namePart, groupPart });
+
+  let primaryQuery = supabase
     .from("profiles")
-    .select("id, full_name, group_name, faculty, program, course_number")
-    .or(`full_name.ilike.%${normalizedQuery}%,group_name.ilike.%${normalizedQuery}%`)
-    .limit(50);
+    .select("id, full_name, group_name, faculty, program, course_number");
+
+  const normalizedGroupPart = sanitizeSearchToken(groupPart);
+  if (normalizedGroupPart) {
+    primaryQuery = primaryQuery.ilike("group_name", `%${normalizedGroupPart}%`);
+  }
+
+  const sanitizedNameTokens = nameTokens
+    .map((token) => sanitizeSearchToken(token))
+    .filter(Boolean)
+    .slice(0, 5);
+
+  if (sanitizedNameTokens.length > 0) {
+    primaryQuery = primaryQuery.or(
+      sanitizedNameTokens.map((token) => `full_name.ilike.%${token}%`).join(",")
+    );
+  }
+
+  const { data, error } = await primaryQuery.limit(50);
 
   if (error) {
     console.error("[telegram/auth] profile lookup error:", error.message);
     return [];
   }
 
-  const candidates = (data ?? []) as ProfileCandidate[];
+  let candidates = (data ?? []) as ProfileCandidate[];
+
+  if (candidates.length === 0) {
+    const fallbackTokens = (sanitizedNameTokens.length > 0
+      ? sanitizedNameTokens
+      : normalizedQuery.split(/\s+/).map((token) => sanitizeSearchToken(token)).filter(Boolean)
+    ).slice(0, 2);
+
+    const fallbackFilters = [
+      ...fallbackTokens.map((token) => `full_name.ilike.%${token}%`),
+      ...(normalizedGroupPart ? [`group_name.ilike.%${normalizedGroupPart}%`] : []),
+    ];
+
+    if (fallbackFilters.length > 0) {
+      console.info("[telegram/auth] profile search fallback filters:", fallbackFilters);
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from("profiles")
+        .select("id, full_name, group_name, faculty, program, course_number")
+        .or(fallbackFilters.join(","))
+        .limit(80);
+
+      if (fallbackError) {
+        console.error("[telegram/auth] profile fallback lookup error:", fallbackError.message);
+      } else {
+        candidates = (fallbackData ?? []) as ProfileCandidate[];
+      }
+    }
+  }
+
   return rankProfileMatches(candidates, normalizedQuery, {
     firstName: from.first_name,
     lastName: from.last_name,
