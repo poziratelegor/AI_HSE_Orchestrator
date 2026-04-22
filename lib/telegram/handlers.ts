@@ -26,6 +26,7 @@ import {
 } from "@/lib/telegram/bot";
 import { formatOrchestrateResultForTelegram } from "@/lib/telegram/format";
 import { consumeLinkCode, parseStartLinkPayload } from "@/lib/telegram/link";
+import { getTelegramCtaLinks } from "@/lib/telegram/app-url";
 
 // ─── Telegram types (минимальное подмножество) ───────────────────────────────
 
@@ -205,6 +206,29 @@ const MSG = {
   DOC_MONTHLY_QUOTA:
     "⚠️ Достигнут месячный лимит объёма документов (500 MB/месяц).",
 };
+
+function buildTelegramInlineKeyboard() {
+  const links = getTelegramCtaLinks();
+  return {
+    inline_keyboard: [[
+      { text: "Зарегистрироваться", url: links.signupUrl },
+      { text: "Открыть профиль", url: links.profileUrl },
+    ]],
+  };
+}
+
+function withExplicitLinksFallback(text: string): string {
+  const links = getTelegramCtaLinks();
+  if (links.hasCanonicalUrl) return text;
+
+  return [
+    text,
+    "",
+    "Ссылки:",
+    `• Регистрация: ${links.signupUrl}`,
+    `• Профиль: ${links.profileUrl}`,
+  ].join("\n");
+}
 
 async function ensureDocumentQuota(userId: string, incomingBytes: number): Promise<{
   ok: boolean;
@@ -424,17 +448,32 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
       await sendMessage({ chatId, text: reply });
       return { ok: true };
     }
-    await sendMessage({ chatId, text: MSG.WELCOME, parseMode: "Markdown" });
+    await sendMessage({
+      chatId,
+      text: withExplicitLinksFallback(MSG.WELCOME),
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramInlineKeyboard(),
+    });
     return { ok: true };
   }
 
   if (message.text?.startsWith("/help")) {
-    await sendMessage({ chatId, text: MSG.WELCOME, parseMode: "Markdown" });
+    await sendMessage({
+      chatId,
+      text: withExplicitLinksFallback(MSG.WELCOME),
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramInlineKeyboard(),
+    });
     return { ok: true };
   }
 
   if (message.text?.startsWith("/link")) {
-    await sendMessage({ chatId, text: MSG.LINK_HINT, parseMode: "Markdown" });
+    await sendMessage({
+      chatId,
+      text: withExplicitLinksFallback(MSG.LINK_HINT),
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramInlineKeyboard(),
+    });
     return { ok: true };
   }
 
@@ -443,7 +482,12 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   // имеет смысл только для известного userId. Без привязки — отказ.
   const userId = from ? await getLinkedUserId(from.id) : undefined;
   if (!userId) {
-    await sendMessage({ chatId, text: MSG.NEED_LINK, parseMode: "Markdown" });
+    await sendMessage({
+      chatId,
+      text: withExplicitLinksFallback(MSG.NEED_LINK),
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramInlineKeyboard(),
+    });
     return { ok: true };
   }
 
