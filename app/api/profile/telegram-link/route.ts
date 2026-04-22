@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
-import { generateLinkCode, LinkCodeRateLimitedError } from "@/lib/telegram/link";
+import {
+  BotUsernameMissingConfigError,
+  generateLinkCode,
+  LinkCodeRateLimitedError,
+} from "@/lib/telegram/link";
 
 export const runtime = "nodejs";
 
@@ -38,6 +42,21 @@ export async function POST(request: Request) {
         { status: 429, headers: { "Retry-After": "3600" } }
       );
     }
+
+    if (err instanceof BotUsernameMissingConfigError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: err.code,
+          reason: "Telegram bot username is missing in server configuration.",
+          instruction:
+            "Set TELEGRAM_BOT_USERNAME (without or with @) in environment variables and redeploy the app.",
+          message: "Telegram-бот не сконфигурирован. Обратитесь к администратору.",
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json(
       {
         ok: false,

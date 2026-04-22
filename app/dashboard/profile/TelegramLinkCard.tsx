@@ -9,6 +9,9 @@ type LinkResponse = {
   expiresAt?: string;
   deepLink?: string;
   botUsername?: string | null;
+  error?: string;
+  reason?: string;
+  instruction?: string;
   message?: string;
 };
 
@@ -53,6 +56,7 @@ export function TelegramLinkCard() {
   const expiresMin = link?.expiresAt
     ? Math.max(0, Math.round((new Date(link.expiresAt).getTime() - Date.now()) / 60_000))
     : null;
+  const botMisconfigured = link?.ok === false && link.error === "bot_username_missing";
 
   return (
     <div className="mt-6 rounded-2xl border border-[var(--hse-border)] bg-white p-6 shadow-sm">
@@ -65,7 +69,7 @@ export function TelegramLinkCard() {
           </p>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-          ✈️ @{link?.botUsername ?? "StudyflowBot"}
+          {link?.botUsername ? `✈️ @${link.botUsername}` : "✈️ Telegram"}
         </span>
       </div>
 
@@ -79,7 +83,16 @@ export function TelegramLinkCard() {
           >
             {loading ? "Генерирую ссылку…" : "🔗 Привязать Telegram"}
           </button>
-          {link?.message && (
+          {botMisconfigured && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
+              <p className="font-semibold">⚠️ Бот не сконфигурирован.</p>
+              <p className="mt-1">
+                Администратору нужно задать <code>TELEGRAM_BOT_USERNAME</code> и перезапустить
+                приложение.
+              </p>
+            </div>
+          )}
+          {link?.message && !botMisconfigured && (
             <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
               {link.message}
             </p>

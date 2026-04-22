@@ -34,6 +34,15 @@ export class LinkCodeRateLimitedError extends Error {
   }
 }
 
+export class BotUsernameMissingConfigError extends Error {
+  readonly code = "bot_username_missing";
+
+  constructor() {
+    super("Telegram bot username is not configured");
+    this.name = "BotUsernameMissingConfigError";
+  }
+}
+
 function generateCode(): string {
   let s = "";
   // crypto.getRandomValues есть и в Node 20+ и в edge runtime
@@ -49,7 +58,7 @@ export interface LinkCodeResult {
   code: string;
   expiresAt: string;
   deepLink: string;
-  botUsername: string | null;
+  botUsername: string;
 }
 
 /**
@@ -83,10 +92,12 @@ export async function generateLinkCode(userId: string): Promise<LinkCodeResult> 
     throw new Error(`Не удалось сохранить код привязки: ${error.message}`);
   }
 
-  const botUsername = process.env.TELEGRAM_BOT_USERNAME?.replace(/^@/, "") ?? null;
-  const deepLink = botUsername
-    ? `https://t.me/${botUsername}?start=link_${code}`
-    : `https://t.me/?start=link_${code}`;
+  const botUsername = process.env.TELEGRAM_BOT_USERNAME?.replace(/^@/, "") ?? "";
+  if (!botUsername) {
+    throw new BotUsernameMissingConfigError();
+  }
+
+  const deepLink = `https://t.me/${botUsername}?start=link_${code}`;
 
   return { code, expiresAt, deepLink, botUsername };
 }
