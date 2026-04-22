@@ -45,35 +45,6 @@ export async function checkRateLimit(
     // Read current count
     const raw = await cacheGet(key);
 
-    // Redis unavailable
-    if (raw === null && process.env.UPSTASH_REDIS_REST_URL) {
-      if (failOpen) {
-        // Could not reach Redis at all — allow request
-        console.warn("[rate-limit] Redis unavailable, allowing request");
-        return { allowed: true };
-      }
-      console.warn("[rate-limit] Redis unavailable, denying request (fail-closed)");
-      return {
-        allowed: false,
-        response: NextResponse.json(
-          {
-            ok: false,
-            error: "rate_limit_unavailable",
-            message: "Сервис временно недоступен. Попробуйте позже.",
-            retryAfterSeconds: windowSeconds
-          },
-          {
-            status: 503,
-            headers: {
-              "Retry-After": String(windowSeconds),
-              "X-RateLimit-Limit": String(limit),
-              "X-RateLimit-Window": String(windowSeconds)
-            }
-          }
-        )
-      };
-    }
-
     const current = raw !== null ? parseInt(raw, 10) : 0;
 
     if (current >= limit) {
