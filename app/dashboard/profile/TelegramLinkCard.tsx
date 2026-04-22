@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type LinkResponse = {
   ok: boolean;
@@ -12,6 +13,7 @@ type LinkResponse = {
 };
 
 export function TelegramLinkCard() {
+  const supabase = getSupabaseBrowserClient();
   const [loading, setLoading] = useState(false);
   const [link, setLink] = useState<LinkResponse | null>(null);
   const [copied, setCopied] = useState(false);
@@ -20,7 +22,14 @@ export function TelegramLinkCard() {
     setLoading(true);
     setCopied(false);
     try {
-      const res = await fetch("/api/profile/telegram-link", { method: "POST" });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      const res = await fetch("/api/profile/telegram-link", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        credentials: "include",
+        cache: "no-store"
+      });
       const data = (await res.json()) as LinkResponse;
       setLink(data);
     } catch {

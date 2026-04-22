@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSupabaseServerClient } from "@/lib/supabase/server";
+import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
 import { generateLinkCode, LinkCodeRateLimitedError } from "@/lib/telegram/link";
 
 export const runtime = "nodejs";
@@ -12,11 +12,8 @@ export const runtime = "nodejs";
  *
  * Auth: требует залогиненного пользователя (Bearer токен Supabase сессии).
  */
-export async function POST(_request: Request) {
-  const supabase = getSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+export async function POST(request: Request) {
+  const { user } = await getSupabaseUserFromRequest(request);
 
   if (!user) {
     return NextResponse.json(
