@@ -8,7 +8,9 @@ export const ANALYTICS_EVENTS = {
   DOCUMENT_READY: "document_ready",
   DOCUMENT_FAILED: "document_failed",
   LETTER_GENERATED: "letter_generated",
-  FIRST_QUERY: "first_query"
+  FIRST_QUERY: "first_query",
+  TELEGRAM_AUTH_SUCCESS: "telegram_auth_success",
+  TELEGRAM_AUTH_FAIL: "telegram_auth_fail"
 } as const;
 
 export type AnalyticsEventName =

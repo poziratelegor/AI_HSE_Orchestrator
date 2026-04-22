@@ -27,6 +27,8 @@ import {
 } from "@/lib/telegram/bot";
 import { formatOrchestrateResultForTelegram } from "@/lib/telegram/format";
 import { getTelegramCtaLinks } from "@/lib/telegram/app-url";
+import { trackEvent } from "@/lib/analytics/events";
+import { ANALYTICS_EVENTS } from "@/lib/constants/analytics";
 import { rankProfileMatches, type ProfileCandidate } from "@/lib/telegram/profile-match";
 
 // ─── Telegram types (минимальное подмножество) ───────────────────────────────
@@ -252,6 +254,17 @@ const MSG = {
     "⚠️ Достигнут дневной лимит документов (10/день). Попробуйте снова завтра.",
   DOC_MONTHLY_QUOTA:
     "⚠️ Достигнут месячный лимит объёма документов (500 MB/месяц).",
+
+  AUTH_EMAIL_PROMPT: [
+    "🔐 *Вход в StudyFlow AI*",
+    "",
+    "Укажите ваш email, который использовали при регистрации на сайте.",
+  ].join("\n"),
+  AUTH_EMAIL_INVALID: "⚠️ Неверный формат email. Попробуйте ещё раз.",
+  AUTH_NAME_PROMPT: "Отлично. Теперь введите ФИО как в профиле StudyFlow.",
+  AUTH_NAME_INVALID: "⚠️ Введите ФИО (минимум 5 символов).",
+  AUTH_SUCCESS: "✅ Авторизация выполнена. Доступ открыт — можно сразу задавать вопросы.",
+  AUTH_FAILED: "⚠️ Не удалось подтвердить аккаунт по email/ФИО. Проверьте данные и попробуйте снова.",
 };
 
 function buildTelegramInlineKeyboard() {
@@ -360,7 +373,7 @@ async function upsertTelegramUser(from: TelegramUser): Promise<void> {
   }
 }
 
-// ─── Lookup linked Supabase userId ───────────────────────────────────────────
+// ─── Lookup linked Supabase userId + FSM state ───────────────────────────────
 
 async function getTelegramAuthState(telegramUserId: number): Promise<TelegramUserAuthState> {
   try {
