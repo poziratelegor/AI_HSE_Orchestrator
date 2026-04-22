@@ -19,6 +19,13 @@ if (!token || !appUrl) {
 }
 
 const webhookUrl = `${appUrl.replace(/\/$/, "")}/api/telegram/webhook`;
+const normalizedAppUrl = appUrl.replace(/\/$/, "");
+
+const telegramCommands = [
+  { command: "start", description: "Запуск и справка" },
+  { command: "help", description: "Возможности бота" },
+  { command: "link", description: "Привязка аккаунта" },
+] as const;
 
 async function main() {
   console.log(`\n📡 Регистрирую webhook: ${webhookUrl}\n`);
@@ -47,7 +54,57 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Проверить статус
+  // 3. Установить команды бота (default + ru локаль)
+  const setCommandsDefaultRes = await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      commands: telegramCommands,
+    }),
+  });
+  const setCommandsDefaultData = (await setCommandsDefaultRes.json()) as {
+    ok: boolean;
+    description?: string;
+  };
+  console.log(
+    `   Установка команд (default): ${setCommandsDefaultData.ok ? "✅" : `❌ ${setCommandsDefaultData.description ?? "unknown error"}`}`,
+  );
+
+  const setCommandsRuRes = await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      commands: telegramCommands,
+      language_code: "ru",
+    }),
+  });
+  const setCommandsRuData = (await setCommandsRuRes.json()) as {
+    ok: boolean;
+    description?: string;
+  };
+  console.log(`   Установка команд (ru): ${setCommandsRuData.ok ? "✅" : `❌ ${setCommandsRuData.description ?? "unknown error"}`}`);
+
+  // 4. Установить кнопку меню (опционально)
+  const setMenuButtonRes = await fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      menu_button: {
+        type: "web_app",
+        text: "Открыть приложение",
+        web_app: { url: normalizedAppUrl },
+      },
+    }),
+  });
+  const setMenuButtonData = (await setMenuButtonRes.json()) as {
+    ok: boolean;
+    description?: string;
+  };
+  console.log(
+    `   Установка кнопки меню: ${setMenuButtonData.ok ? "✅" : `⚠️ ${setMenuButtonData.description ?? "unknown error"} (пропускаю, опционально)`}`,
+  );
+
+  // 5. Проверить статус
   const infoRes = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
   const info = (await infoRes.json()) as { result: Record<string, unknown> };
 
@@ -56,7 +113,7 @@ async function main() {
   console.log(`   Pending updates:  ${info.result.pending_update_count}`);
   console.log(`   Last error:       ${info.result.last_error_message ?? "нет"}`);
 
-  // 4. Проверить getMe
+  // 6. Проверить getMe
   const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
   const me = (await meRes.json()) as { result: { username?: string; first_name?: string } };
   console.log(`\n🤖 Бот: @${me.result.username} (${me.result.first_name})`);

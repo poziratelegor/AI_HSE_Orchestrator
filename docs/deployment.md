@@ -168,6 +168,33 @@ npx tsx scripts/setup-telegram-webhook.ts
 # ✓ Ожидающих обновлений: 0
 ```
 
+### Проверка Telegram меню
+
+После запуска `scripts/setup-telegram-webhook.ts` скрипт автоматически:
+
+1. Регистрирует webhook.
+2. Устанавливает команды бота (`/start`, `/help`, `/link`) для `default` и локали `ru`.
+3. Пытается установить кнопку меню `web_app` со ссылкой на `NEXT_PUBLIC_APP_URL` (опционально).
+
+Проверить вручную можно через Bot API:
+
+```bash
+# Команды по умолчанию
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMyCommands"
+
+# Команды для русской локали
+curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMyCommands" \
+  -H "Content-Type: application/json" \
+  -d '{"language_code":"ru"}'
+
+# Кнопка меню
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getChatMenuButton"
+```
+
+Ожидаемо:
+- в списке команд есть `start`, `help`, `link` с русскими описаниями;
+- `getChatMenuButton` возвращает `web_app` (или `default`, если Telegram не принял кастомную кнопку — это не критично).
+
 ### Локальный туннель (для разработки)
 
 ```bash
