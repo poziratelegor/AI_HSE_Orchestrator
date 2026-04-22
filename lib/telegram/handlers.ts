@@ -144,6 +144,10 @@ const MSG = {
   WELCOME: [
     "👋 Привет! Я *StudyFlow AI* — ваш академический ассистент.",
     "",
+    "*Быстрый старт (2 шага):*",
+    "1. Нажмите *«🔐 Ввести email»* и отправьте email, с которым вы регистрировались в StudyFlow.",
+    "2. После подтверждения просто напишите задачу в свободной форме.",
+    "",
     "*Что я умею:*",
     "• ✉️ Генерировать официальные письма",
     "• 📝 Извлекать задачи и дедлайны (с напоминаниями)",
@@ -152,13 +156,7 @@ const MSG = {
     "• 📋 Создавать шпаргалки и квизы",
     "• 📚 Отвечать по загруженным документам",
     "",
-    "*Как пользоваться:*",
-    "• Просто напишите задачу в свободной форме",
-    "• Отправьте 🎤 голосовое сообщение, аудио или видео-кружок",
-    "• Пришлите 📎 PDF/TXT/MD — я загружу его в вашу базу знаний",
-    "",
     "*Команды:*",
-    "/link — привязать ваш аккаунт StudyFlow к этому Telegram",
     "/help — эта справка",
   ].join("\n"),
   LINK_HINT: [
@@ -179,12 +177,11 @@ const MSG = {
   NEED_LINK: [
     "🔒 *Доступ только для зарегистрированных пользователей.*",
     "",
-    "Чтобы пользоваться ассистентом, привяжите аккаунт StudyFlow AI:",
-    "1. Зарегистрируйтесь на сайте (если ещё не сделали)",
-    "2. Откройте *Профиль* → кнопка *«Привязать Telegram»*",
-    "3. Перейдите по полученной ссылке",
+    "*Быстрый старт (2 шага):*",
+    "1. Нажмите *«🔐 Ввести email»* ниже и отправьте email от аккаунта StudyFlow.",
+    "2. Если аккаунта ещё нет — зарегистрируйтесь по ссылке *«Зарегистрироваться»*.",
     "",
-    "Команда /link — подробности.",
+    "После этого можно писать задачи, вопросы и загружать документы.",
   ].join("\n"),
   RATE_LIMITED: "⚠️ Слишком много сообщений. Лимит: 30 запросов в час. Попробуйте позже.",
   RATE_LIMITED_HEAVY: "⚠️ Слишком много голосовых за час. Лимит: 5 голосовых/аудио в час.",
@@ -200,7 +197,7 @@ const MSG = {
   EMPTY_TEXT: "Напишите задачу текстом, отправьте голосовое сообщение или прикрепите файл. Для справки — /start.",
   PHOTO_NOT_SUPPORTED:
     "📷 Я пока не умею читать содержимое фотографий. Если на снимке текст — пришлите его как PDF/TXT, я его проиндексирую.",
-  DOC_NEED_LINK: "📎 Чтобы загружать документы в вашу базу знаний, привяжите аккаунт командой /link.",
+  DOC_NEED_LINK: "📎 Чтобы загружать документы в вашу базу знаний, сначала нажмите «🔐 Ввести email» и отправьте ваш email StudyFlow.",
   DOC_TOO_BIG: "⚠️ Файл слишком большой (лимит 20 МБ).",
   DOC_UNSUPPORTED:
     "⚠️ Пока поддерживаются только PDF, TXT и MD. Остальные форматы — через раздел «Документы» на сайте.",
@@ -229,7 +226,7 @@ function buildTelegramActionKeyboard() {
     inline_keyboard: [
       [
         { text: "ℹ️ /help", callback_data: "help" },
-        { text: "🔁 Повторная привязка", callback_data: "relink" },
+        { text: "🔐 Ввести email", callback_data: "auth:start" },
       ],
       [
         { text: "❓ Задать вопрос", callback_data: "scenario:ask_question" },
@@ -699,10 +696,10 @@ async function runOrchestrate(
   }
 }
 
-type CallbackPayload = "help" | "relink" | "scenario:ask_question" | "scenario:upload_document";
+type CallbackPayload = "help" | "auth:start" | "scenario:ask_question" | "scenario:upload_document";
 const ALLOWED_CALLBACK_PAYLOADS = new Set<CallbackPayload>([
   "help",
-  "relink",
+  "auth:start",
   "scenario:ask_question",
   "scenario:upload_document",
 ]);
@@ -735,10 +732,12 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callbac
     return;
   }
 
-  if (payload === "relink") {
+  if (payload === "auth:start") {
     await sendMessage({
       chatId,
-      text: withExplicitLinksFallback(MSG.LINK_HINT),
+      text: withExplicitLinksFallback(
+        "🔐 Отправьте одним сообщением email, с которым вы зарегистрированы в StudyFlow. Если аккаунта нет — нажмите «Зарегистрироваться»."
+      ),
       parseMode: "Markdown",
       replyMarkup: buildTelegramInlineKeyboard(),
     });
