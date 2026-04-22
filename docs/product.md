@@ -68,29 +68,6 @@
 
 ---
 
-## 5. Текущий статус реализации
-
-| Слой | Файлы | Статус |
-|------|-------|--------|
-| Оркестратор (routing, classify, registry) | `lib/orchestrator/*` | ✅ scaffold — rules-based, работает |
-| Сервисы (бизнес-логика workflow) | `lib/services/*` | ⚙️ все заглушки — нужна реализация |
-| RAG — chunk | `lib/rag/chunk.ts` | ⚠️ базовая реализация — overlap не реализован |
-| RAG — embed, retrieve, citations | `lib/rag/embed.ts`, `retrieve.ts`, `citations.ts` | ⚙️ заглушки |
-| OpenAI client | `lib/ai/client.ts` | ✅ реализован |
-| OpenAI prompts + schemas | `lib/ai/prompts.ts`, `schemas.ts` | ✅ определены — не подключены к сервисам |
-| LLM-классификация | — | ⚙️ не подключена (schema и промпт готовы) |
-| Supabase client (browser + server) | `lib/supabase/client.ts`, `server.ts` | ✅ работает |
-| Supabase middleware (auth guard) | `lib/supabase/middleware.ts` | ⚙️ заглушка — withAuthGuard() не работает |
-| Route handlers | `app/api/*` | ⚠️ scaffold — нет auth, нет валидации |
-| Upload: приём файла | `app/api/upload/route.ts` | ⚙️ заглушка — нет Supabase, нет background processing |
-| Telegram webhook | `app/api/telegram/webhook/route.ts` | ⚠️ принимает и верифицирует, handleTelegramUpdate не вызван |
-| Telegram bot + handlers | `lib/telegram/*` | ⚙️ заглушки |
-| Аналитика | `lib/analytics/*` | ⚙️ заглушки — trackEvent не пишет в БД |
-| БД миграция | `supabase/migrations/0001_init.sql` | ✅ готово (все таблицы) |
-| RLS политики | `supabase/policies.sql` | ⚙️ только TODO-комментарий — не применено |
-| UI компоненты | `components/*` | ⚙️ пустые директории |
-| Dashboard pages | `app/dashboard/*` | ⚙️ структура без реализации |
-
 ---
 
 ## 6. Жизненный цикл запроса
@@ -331,58 +308,6 @@ INPUT_TEXT_RETENTION_DAYS=90                  # Retention для orchestrator_ru
 
 ---
 
-## 15. Известные ограничения и риски
-
-| # | Ограничение | Риск | Митигация |
-|---|------------|------|-----------|
-| 1 | Длинные лекции (>10 мин аудио) | Serverless timeout | waitUntil() + status polling |
-| 2 | Качество RAG зависит от чанкинга | Неверные ответы | Тюнинг RAG_CHUNK_SIZE, реализовать overlap |
-| 3 | Оркестратор ошибается на ambiguous запросах | Неверный workflow | LLM-классификация + clarification loop |
-| 4 | Vercel Serverless timeout 10–60s | Длинные задачи падают | Async processing + status polling |
-| 5 | Telegram webhook требует публичный URL | Сложная локальная разработка | cloudflared tunnel |
-| 6 | OpenAI API latency непредсказуема | P95 latency страдает | Timeout + fallback message |
-| 7 | RLS политики не применены | Утечка данных студентов — критично | Применить supabase/policies.sql первым делом |
-| 8 | router.ts не проверяет execute threshold (0.75) | Workflow запускается при confidence 0.45–0.74 | Доработать router.ts при подключении LLM-классификатора |
-| 9 | chunk.ts не реализует overlap | Потеря контекста на границах чанков | Реализовать overlap при работе над RAG pipeline |
-
----
-
-## 16. Архитектурные инварианты (нельзя нарушать)
-
-```
-1. НОВЫЙ WORKFLOW = одна запись в lib/orchestrator/registry.ts
-   Не трогай router.ts, executor.ts или classify.ts при добавлении workflow.
-
-2. БИЗНЕС-ЛОГИКА только в lib/services/*
-   Route handlers: auth check -> input validation -> вызов сервиса -> return JSON.
-   Никакой логики OpenAI и никаких запросов к БД в route handler напрямую.
-
-3. СЕКРЕТЫ только на сервере
-   SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY, TELEGRAM_BOT_TOKEN — никогда в клиент.
-   NEXT_PUBLIC_* — единственные переменные, допустимые в клиенте.
-
-4. OpenAI НЕ ВЫЗЫВАЕТСЯ из клиентских компонентов
-   Только через /api/* route handlers.
-
-5. LIB/SERVICES/* ВЫЗЫВАЮТСЯ НАПРЯМУЮ (без HTTP)
-   Не делай сервисы зависимыми от Request/Response.
-   Они должны работать из route handler, n8n и скрипта одинаково.
-
-6. TELEGRAM WEBHOOK ВСЕГДА ОТВЕЧАЕТ 200 OK
-   Даже при ошибке обработки — иначе Telegram ретраит бесконечно.
-   Логируй ошибку внутри, но возвращай { ok: true }.
-
-7. UPLOAD НЕ БЛОКИРУЕТ
-   /api/upload создаёт documents(status: "pending"), сразу отвечает.
-   Чанкинг и embeddings — в background через waitUntil() или очередь.
-
-8. RLS ВКЛЮЧЁН для всех пользовательских таблиц
-   Service role обходит RLS — используй только в background jobs.
-   Для пользовательских запросов — только user client.
-```
-
----
-
 ## 17. Онбординг для AI-ассистента
 
 Читай файлы в этом порядке перед любой задачей:
@@ -395,8 +320,6 @@ INPUT_TEXT_RETENTION_DAYS=90                  # Retention для orchestrator_ru
 6. `docs/database.md` — схема данных
 7. `lib/constants/workflows.ts` — идентификаторы workflow
 8. `lib/orchestrator/registry.ts` — реестр workflow
-
-После прочтения этих файлов ты готов работать с любым файлом в проекте без риска нарушить архитектурные инварианты.
 
 **Единые источники правды:**
 
