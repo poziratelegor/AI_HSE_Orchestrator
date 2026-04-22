@@ -117,6 +117,24 @@ describe("telegram handler auth gate and callbacks", () => {
     expect(mockOrchestrate).not.toHaveBeenCalled();
   });
 
+  it("/start for linked user does not drop authorization", async () => {
+    telegramUsersSingle.mockResolvedValue({ data: { user_id: "user-42", fsm_state: "idle", fsm_context: {} } });
+    const { handleTelegramUpdate } = await import("@/lib/telegram/handlers");
+
+    await handleTelegramUpdate(makeMessageUpdate({ text: "/start" }));
+
+    expect(telegramUsersUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        telegram_user_id: "777",
+        fsm_state: "idle",
+      }),
+      { onConflict: "telegram_user_id" }
+    );
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    const payload = mockSendMessage.mock.calls[0][0] as { text: string };
+    expect(payload.text).toContain("StudyFlow AI");
+  });
+
   it("unlinked telegram user receives registration message for normal text", async () => {
     const { handleTelegramUpdate } = await import("@/lib/telegram/handlers");
 
@@ -163,6 +181,36 @@ describe("telegram handler auth gate and callbacks", () => {
 
     expect(mockSendMessage).toHaveBeenCalledTimes(2);
     expect(mockAnswerCallbackQuery).toHaveBeenCalledWith("cb-1");
+  });
+
+  it("callback auth:start switches FSM to await_profile and prompts user", async () => {
+    const { handleTelegramUpdate } = await import("@/lib/telegram/handlers");
+
+    await handleTelegramUpdate({
+      update_id: 1003,
+      callback_query: {
+        id: "cb-2",
+        from: { id: 777, is_bot: false, first_name: "Test" },
+        data: "auth:start",
+        message: {
+          message_id: 203,
+          from: { id: 777, is_bot: false, first_name: "Test" },
+          chat: { id: 555, type: "private" },
+          date: 1,
+        },
+      },
+    });
+
+    expect(telegramUsersUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        telegram_user_id: "777",
+        fsm_state: "await_profile",
+      }),
+      { onConflict: "telegram_user_id" }
+    );
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    const payload = mockSendMessage.mock.calls[0][0] as { text: string };
+    expect(payload.text).toContain("Отправьте *ФИО и группу*");
   });
 
   it("document and voice branches do not start for unauthorized user", async () => {

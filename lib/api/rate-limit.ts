@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { cacheGet, cacheSet } from "@/lib/cache/redis";
+import { cacheGetWithAvailability, cacheSet } from "@/lib/cache/redis";
 
 export interface RateLimitConfig {
   /** Max requests allowed in the window */
@@ -43,12 +43,10 @@ export async function checkRateLimit(
     const key = `rl:${userId}:${action}:${bucket}`;
 
     // Read current count
-    const raw = await cacheGet(key);
+    const { value: raw, unavailable } = await cacheGetWithAvailability(key);
 
-    // Redis unavailable
-    if (raw === null && process.env.UPSTASH_REDIS_REST_URL) {
+    if (unavailable) {
       if (failOpen) {
-        // Could not reach Redis at all — allow request
         console.warn("[rate-limit] Redis unavailable, allowing request");
         return { allowed: true };
       }
