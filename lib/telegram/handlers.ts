@@ -28,6 +28,7 @@ import {
 import { formatOrchestrateResultForTelegram } from "@/lib/telegram/format";
 import { consumeLinkCode, parseStartLinkPayload } from "@/lib/telegram/link";
 import { getTelegramCtaLinks } from "@/lib/telegram/app-url";
+import { rankProfileMatches, type ProfileCandidate } from "@/lib/telegram/profile-match";
 
 // ─── Telegram types (минимальное подмножество) ───────────────────────────────
 
@@ -116,6 +117,7 @@ const WHISPER_TIMEOUT_MS = 60_000;
 const MAX_TEXT_INPUT = 15_000; // символов — защита от DoS токенов LLM
 const DOC_DAILY_LIMIT = 10;
 const DOC_MONTHLY_BYTES_LIMIT = 500 * 1024 * 1024; // 500 MB
+const AUTH_MATCH_THRESHOLD = 0.62;
 
 // Rate-limit: одинаковый per chatId для привязанных и непривязанных.
 // 30 запросов/час на chat_id.
@@ -174,6 +176,20 @@ const MSG = {
     "После этого все задачи и письма из чата автоматически попадут в ваш дашборд.",
   ].join("\n"),
   LINK_OK: "✅ Аккаунт успешно привязан! Теперь я сохраняю ваши задачи и шлю напоминания о дедлайнах.",
+  AUTH_START: [
+    "🔐 *Авторизация в StudyFlow AI*",
+    "",
+    "Чтобы подключить этот Telegram к вашему аккаунту, пройдите короткую проверку профиля.",
+    "Нажмите кнопку ниже и отправьте ФИО + группу (например: *Иванов Иван ПМИ-221*).",
+  ].join("\n"),
+  AUTH_ASK_PROFILE: "✍️ Отправьте *ФИО и группу* одним сообщением (например: Иванов Иван ПМИ-221).",
+  AUTH_NOT_FOUND:
+    "⚠️ Не удалось найти профиль. Проверьте ФИО/группу и попробуйте ещё раз. Для отмены — /start.",
+  AUTH_AMBIGUOUS: (variants: string) =>
+    `⚠️ Найдено несколько похожих профилей:\n${variants}\n\nУточните сообщение: добавьте полное ФИО и группу.`,
+  AUTH_CONFIRM: (label: string) =>
+    `Нашёл профиль:\n*${label}*\n\nПодтвердить привязку этого аккаунта?`,
+  AUTH_CANCELLED: "Ок, отменил авторизацию. Чтобы начать заново — /start.",
   LINK_NOT_FOUND: "⚠️ Код привязки не найден или уже использован. Сгенерируйте новый в /dashboard/profile.",
   LINK_EXPIRED: "⚠️ Срок действия кода истёк (код живёт 5 минут). Сгенерируйте новый в профиле.",
   NEED_LINK: [
@@ -236,6 +252,12 @@ function buildTelegramActionKeyboard() {
         { text: "📎 Загрузить документ", callback_data: "scenario:upload_document" },
       ],
     ],
+  };
+}
+
+function buildTelegramAuthStartKeyboard() {
+  return {
+    inline_keyboard: [[{ text: "🔐 Начать авторизацию", callback_data: "auth:start" }]],
   };
 }
 
@@ -326,6 +348,81 @@ async function getLinkedUserId(telegramUserId: number): Promise<string | undefin
   } catch {
     return undefined;
   }
+}
+
+type AuthFlowState = "idle" | "await_profile" | "await_confirm";
+type AuthContext = {
+  query?: string;
+  candidateUserId?: string;
+  candidateLabel?: string;
+};
+
+async function getTelegramAuthRecord(telegramUserId: number): Promise<{
+  userId?: string;
+  state: AuthFlowState;
+  context: AuthContext;
+}> {
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data } = await supabase
+      .from("telegram_users")
+      .select("user_id, fsm_state, fsm_context")
+      .eq("telegram_user_id", String(telegramUserId))
+      .single();
+
+    const row = (data as { user_id?: string; fsm_state?: string; fsm_context?: AuthContext } | null) ?? null;
+    const state = row?.fsm_state === "await_profile" || row?.fsm_state === "await_confirm" ? row.fsm_state : "idle";
+    return {
+      userId: row?.user_id ?? undefined,
+      state,
+      context: row?.fsm_context ?? {},
+    };
+  } catch {
+    return { state: "idle", context: {} };
+  }
+}
+
+async function setTelegramAuthState(telegramUserId: number, state: AuthFlowState, context: AuthContext = {}): Promise<void> {
+  try {
+    const supabase = getSupabaseServerClient();
+    await supabase
+      .from("telegram_users")
+      .upsert(
+        {
+          telegram_user_id: String(telegramUserId),
+          fsm_state: state,
+          fsm_context: context,
+          last_active_at: new Date().toISOString(),
+        },
+        { onConflict: "telegram_user_id" }
+      );
+  } catch (err) {
+    console.error("[telegram/auth] set state error:", err instanceof Error ? err.message : err);
+  }
+}
+
+async function findProfileMatches(query: string, from: TelegramUser): Promise<ReturnType<typeof rankProfileMatches>> {
+  const supabase = getSupabaseServerClient();
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) return [];
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, group_name, faculty, program, course_number")
+    .or(`full_name.ilike.%${normalizedQuery}%,group_name.ilike.%${normalizedQuery}%`)
+    .limit(50);
+
+  if (error) {
+    console.error("[telegram/auth] profile lookup error:", error.message);
+    return [];
+  }
+
+  const candidates = (data ?? []) as ProfileCandidate[];
+  return rankProfileMatches(candidates, normalizedQuery, {
+    firstName: from.first_name,
+    lastName: from.last_name,
+    username: from.username,
+  }, AUTH_MATCH_THRESHOLD);
 }
 
 // ─── Transcribe (voice / audio / video_note) ─────────────────────────────────
@@ -456,6 +553,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   }
 
   if (from) void upsertTelegramUser(from);
+  const authRecord = from ? await getTelegramAuthRecord(from.id) : { state: "idle" as AuthFlowState, context: {} as AuthContext };
 
   // ─── PUBLIC команды (доступны без привязки) ──────────────────────────────
   // /start [link_<CODE>], /help, /link
@@ -480,7 +578,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
       chatId,
       text: withExplicitLinksFallback(MSG.WELCOME),
       parseMode: "Markdown",
-      replyMarkup: buildTelegramActionKeyboard(),
+      replyMarkup: authRecord.userId ? buildTelegramActionKeyboard() : buildTelegramAuthStartKeyboard(),
     });
     return { ok: true };
   }
@@ -490,17 +588,17 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
       chatId,
       text: withExplicitLinksFallback(MSG.WELCOME),
       parseMode: "Markdown",
-      replyMarkup: buildTelegramActionKeyboard(),
+      replyMarkup: authRecord.userId ? buildTelegramActionKeyboard() : buildTelegramAuthStartKeyboard(),
     });
     return { ok: true };
   }
 
   if (message.text?.startsWith("/link")) {
+    if (from) await setTelegramAuthState(from.id, "await_profile");
     await sendMessage({
       chatId,
-      text: withExplicitLinksFallback(MSG.LINK_HINT),
+      text: MSG.AUTH_ASK_PROFILE,
       parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
     });
     return { ok: true };
   }
@@ -508,13 +606,50 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   // ─── AUTH GATE: всё остальное — только для привязанных ───────────────────
   // Любой функционал (orchestrate/voice/document) стоит денег (OpenAI) и
   // имеет смысл только для известного userId. Без привязки — отказ.
-  const userId = from ? await getLinkedUserId(from.id) : undefined;
+  const userId = authRecord.userId ?? (from ? await getLinkedUserId(from.id) : undefined);
   if (!userId) {
+    if (from && message.text && authRecord.state === "await_profile") {
+      const matches = await findProfileMatches(message.text, from);
+      if (matches.length === 1) {
+        const [best] = matches;
+        const label = [best.profile.full_name, best.profile.group_name].filter(Boolean).join(" — ");
+        await setTelegramAuthState(from.id, "await_confirm", {
+          query: message.text,
+          candidateUserId: best.profile.id,
+          candidateLabel: label,
+        });
+        await sendMessage({
+          chatId,
+          text: MSG.AUTH_CONFIRM(label || "безымянный профиль"),
+          parseMode: "Markdown",
+          replyMarkup: {
+            inline_keyboard: [[
+              { text: "✅ Да, это я", callback_data: `auth:confirm:${best.profile.id}` },
+              { text: "❌ Нет", callback_data: "auth:cancel" },
+            ]],
+          },
+        });
+        return { ok: true };
+      }
+
+      if (matches.length > 1) {
+        const variants = matches
+          .slice(0, 3)
+          .map((item, idx) => `${idx + 1}. ${item.profile.full_name ?? "Без ФИО"} — ${item.profile.group_name ?? "без группы"}`)
+          .join("\n");
+        await sendMessage({ chatId, text: MSG.AUTH_AMBIGUOUS(variants) });
+        return { ok: true };
+      }
+
+      await sendMessage({ chatId, text: MSG.AUTH_NOT_FOUND });
+      return { ok: true };
+    }
+
     await sendMessage({
       chatId,
-      text: withExplicitLinksFallback(MSG.NEED_LINK),
+      text: MSG.AUTH_START,
       parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
+      replyMarkup: buildTelegramAuthStartKeyboard(),
     });
     return { ok: true };
   }
@@ -699,18 +834,32 @@ async function runOrchestrate(
   }
 }
 
-type CallbackPayload = "help" | "relink" | "scenario:ask_question" | "scenario:upload_document";
+type CallbackPayload =
+  | "help"
+  | "relink"
+  | "scenario:ask_question"
+  | "scenario:upload_document"
+  | "auth:start"
+  | "auth:cancel"
+  | `auth:confirm:${string}`;
 const ALLOWED_CALLBACK_PAYLOADS = new Set<CallbackPayload>([
   "help",
   "relink",
   "scenario:ask_question",
   "scenario:upload_document",
+  "auth:start",
+  "auth:cancel",
 ]);
 
 function parseCallbackPayload(value: unknown): CallbackPayload | null {
   if (typeof value !== "string") return null;
+  if (value.startsWith("auth:confirm:")) return value as CallbackPayload;
   return ALLOWED_CALLBACK_PAYLOADS.has(value as CallbackPayload) ? (value as CallbackPayload) : null;
 }
+
+export const __telegramHandlerTestables = {
+  parseCallbackPayload,
+};
 
 async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callback_query"]>): Promise<void> {
   const callbackId = callback.id;
@@ -732,6 +881,55 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callbac
       parseMode: "Markdown",
       replyMarkup: buildTelegramActionKeyboard(),
     });
+    return;
+  }
+
+  if (payload === "auth:start") {
+    const from = callback.from;
+    await setTelegramAuthState(from.id, "await_profile");
+    await sendMessage({
+      chatId,
+      text: MSG.AUTH_ASK_PROFILE,
+      parseMode: "Markdown",
+    });
+    return;
+  }
+
+  if (payload === "auth:cancel") {
+    const from = callback.from;
+    await setTelegramAuthState(from.id, "idle");
+    await sendMessage({ chatId, text: MSG.AUTH_CANCELLED });
+    return;
+  }
+
+  if (payload.startsWith("auth:confirm:")) {
+    const profileId = payload.replace("auth:confirm:", "");
+    const from = callback.from;
+    const authRecord = await getTelegramAuthRecord(from.id);
+    if (authRecord.state !== "await_confirm" || authRecord.context.candidateUserId !== profileId) {
+      await sendMessage({ chatId, text: "⚠️ Подтверждение истекло. Нажмите /start и начните заново." });
+      return;
+    }
+
+    const supabase = getSupabaseServerClient();
+    const { error } = await supabase.from("telegram_users").upsert(
+      {
+        telegram_user_id: String(from.id),
+        user_id: profileId,
+        username: from.username ?? null,
+        first_name: from.first_name,
+        last_name: from.last_name ?? null,
+        fsm_state: "idle",
+        fsm_context: {},
+        last_active_at: new Date().toISOString(),
+      },
+      { onConflict: "telegram_user_id" }
+    );
+    if (error) {
+      await sendMessage({ chatId, text: MSG.GENERAL_ERROR });
+      return;
+    }
+    await sendMessage({ chatId, text: MSG.LINK_OK });
     return;
   }
 
