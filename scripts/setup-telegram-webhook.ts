@@ -63,7 +63,7 @@ async function main() {
   console.log(`   Pending updates:  ${info.result.pending_update_count}`);
   console.log(`   Last error:       ${info.result.last_error_message ?? "нет"}`);
 
-  // 4. Негативная проверка secret-токена на runtime webhook handler
+  // Негативная проверка secret-токена на runtime webhook handler
   const invalidTokenCheckRes = await fetch(webhookUrl, {
     method: "POST",
     headers: {
@@ -79,7 +79,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 5. Проверить getMe
+  // Проверить getMe
   const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
   const me = (await meRes.json()) as { result: { username?: string; first_name?: string } };
   console.log(`\n🤖 Бот: @${me.result.username} (${me.result.first_name})`);
