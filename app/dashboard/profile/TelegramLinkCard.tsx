@@ -5,6 +5,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type LinkResponse = {
   ok: boolean;
+  error?: string;
   code?: string;
   expiresAt?: string;
   deepLink?: string;
@@ -79,10 +80,20 @@ export function TelegramLinkCard() {
           >
             {loading ? "Генерирую ссылку…" : "🔗 Привязать Telegram"}
           </button>
-          {link?.message && (
-            <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
-              {link.message}
-            </p>
+          {link?.error === "bot_username_missing" ? (
+            <div className="w-full rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
+              <p className="font-medium">⚠️ Бот временно недоступен</p>
+              <p className="mt-1">
+                Бот пока не настроен. Напишите администратору и попросите включить Telegram-бота.
+                После этого вернитесь сюда и снова нажмите «Привязать Telegram».
+              </p>
+            </div>
+          ) : (
+            link?.message && (
+              <p className="rounded-xl border border-red-100 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
+                {link.message}
+              </p>
+            )
           )}
         </div>
       )}

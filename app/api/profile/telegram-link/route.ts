@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSupabaseUserFromRequest } from "@/lib/supabase/server";
-import { generateLinkCode, LinkCodeRateLimitedError } from "@/lib/telegram/link";
+import {
+  BotUsernameMissingError,
+  generateLinkCode,
+  LinkCodeRateLimitedError,
+} from "@/lib/telegram/link";
 
 export const runtime = "nodejs";
 
@@ -36,6 +40,16 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { ok: false, error: "rate_limited", message: err.message },
         { status: 429, headers: { "Retry-After": "3600" } }
+      );
+    }
+    if (err instanceof BotUsernameMissingError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: err.code,
+          message: "Бот не настроен, обратитесь к администратору",
+        },
+        { status: 500 }
       );
     }
     return NextResponse.json(
