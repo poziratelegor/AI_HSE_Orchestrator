@@ -370,6 +370,12 @@
 - `message.text` — маршрутизируется через оркестратор
 - `message.voice` — скачивается → Whisper → оркестратор
 - `message.document` + caption — загружается + caption как запрос
+- `callback_query` — безопасно маршрутизируется по whitelist payload:
+  - `help`
+  - `relink`
+  - `scenario:ask_question`
+  - `scenario:upload_document`
+  - для всех callback выполняется `answerCallbackQuery` (ack), неизвестные payload отклоняются
 
 ---
 
