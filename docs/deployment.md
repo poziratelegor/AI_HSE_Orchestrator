@@ -174,7 +174,8 @@ npx tsx scripts/setup-telegram-webhook.ts
 
 1. Регистрирует webhook.
 2. Устанавливает команды бота (`/start`, `/help`, `/link`) для `default` и локали `ru`.
-3. Пытается установить кнопку меню `web_app` со ссылкой на `NEXT_PUBLIC_APP_URL` (опционально).
+3. Включает `allowed_updates: ["message", "callback_query"]` для inline-кнопок.
+4. Пытается установить кнопку меню `web_app` со ссылкой на `NEXT_PUBLIC_APP_URL` (опционально).
 
 Проверить вручную можно через Bot API:
 
@@ -194,6 +195,17 @@ curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getChatMenuButton"
 Ожидаемо:
 - в списке команд есть `start`, `help`, `link` с русскими описаниями;
 - `getChatMenuButton` возвращает `web_app` (или `default`, если Telegram не принял кастомную кнопку — это не критично).
+
+### UX-flow в Telegram (кнопки + callback)
+
+После `/start` и `/help` бот показывает inline-кнопки:
+
+- `ℹ️ /help` — повторно отправляет справку;
+- `🔁 Повторная привязка` — показывает инструкцию по перепривязке (`/link`);
+- `❓ Задать вопрос` — быстрый сценарий для перехода к Q&A;
+- `📎 Загрузить документ` — быстрый сценарий для загрузки PDF/TXT/MD.
+
+Для каждой нажатой inline-кнопки webhook отправляет `answerCallbackQuery` (ack), чтобы убрать «часики» в Telegram-клиенте. Payload callback обрабатывается только по whitelist.
 
 ### Локальный туннель (для разработки)
 

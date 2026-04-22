@@ -21,6 +21,7 @@ import {
   sendMessage,
   sendMessageChunks,
   sendChatAction,
+  answerCallbackQuery,
   getTelegramFilePath,
   downloadTelegramFile,
 } from "@/lib/telegram/bot";
@@ -99,6 +100,12 @@ type TelegramMessage = {
 type TelegramUpdate = {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: {
+    id: string;
+    from: TelegramUser;
+    data?: string;
+    message?: TelegramMessage;
+  };
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -214,6 +221,21 @@ function buildTelegramInlineKeyboard() {
       { text: "Зарегистрироваться", url: links.signupUrl },
       { text: "Открыть профиль", url: links.profileUrl },
     ]],
+  };
+}
+
+function buildTelegramActionKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "ℹ️ /help", callback_data: "help" },
+        { text: "🔁 Повторная привязка", callback_data: "relink" },
+      ],
+      [
+        { text: "❓ Задать вопрос", callback_data: "scenario:ask_question" },
+        { text: "📎 Загрузить документ", callback_data: "scenario:upload_document" },
+      ],
+    ],
   };
 }
 
@@ -407,8 +429,14 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   if (!update || typeof update !== "object") return { ok: true };
 
   const tgUpdate = update as TelegramUpdate;
+  const callback = tgUpdate.callback_query;
+  if (callback) {
+    await handleCallbackQuery(callback);
+    return { ok: true };
+  }
+
   const message = tgUpdate.message;
-  if (!message) return { ok: true }; // callback_query, edited_message — позже
+  if (!message) return { ok: true }; // edited_message и прочее — игнорируем
 
   const chatId = message.chat.id;
   const from = message.from;
@@ -452,7 +480,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
       chatId,
       text: withExplicitLinksFallback(MSG.WELCOME),
       parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
+      replyMarkup: buildTelegramActionKeyboard(),
     });
     return { ok: true };
   }
@@ -462,7 +490,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
       chatId,
       text: withExplicitLinksFallback(MSG.WELCOME),
       parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
+      replyMarkup: buildTelegramActionKeyboard(),
     });
     return { ok: true };
   }
@@ -669,6 +697,66 @@ async function runOrchestrate(
     console.error("[telegram/handler] Orchestrate error:", err instanceof Error ? err.message : err);
     await sendMessage({ chatId, text: MSG.GENERAL_ERROR });
   }
+}
+
+type CallbackPayload = "help" | "relink" | "scenario:ask_question" | "scenario:upload_document";
+const ALLOWED_CALLBACK_PAYLOADS = new Set<CallbackPayload>([
+  "help",
+  "relink",
+  "scenario:ask_question",
+  "scenario:upload_document",
+]);
+
+function parseCallbackPayload(value: unknown): CallbackPayload | null {
+  if (typeof value !== "string") return null;
+  return ALLOWED_CALLBACK_PAYLOADS.has(value as CallbackPayload) ? (value as CallbackPayload) : null;
+}
+
+async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callback_query"]>): Promise<void> {
+  const callbackId = callback.id;
+  const payload = parseCallbackPayload(callback.data);
+  const chatId = callback.message?.chat.id;
+
+  if (!payload) {
+    await answerCallbackQuery(callbackId, { text: "⚠️ Неизвестное действие. Откройте /help." });
+    return;
+  }
+
+  await answerCallbackQuery(callbackId);
+  if (!chatId) return;
+
+  if (payload === "help") {
+    await sendMessage({
+      chatId,
+      text: withExplicitLinksFallback(MSG.WELCOME),
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramActionKeyboard(),
+    });
+    return;
+  }
+
+  if (payload === "relink") {
+    await sendMessage({
+      chatId,
+      text: withExplicitLinksFallback(MSG.LINK_HINT),
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramInlineKeyboard(),
+    });
+    return;
+  }
+
+  if (payload === "scenario:ask_question") {
+    await sendMessage({
+      chatId,
+      text: "❓ Напишите вопрос в свободной форме — я подберу подходящий сценарий и отвечу.",
+    });
+    return;
+  }
+
+  await sendMessage({
+    chatId,
+    text: "📎 Отправьте PDF/TXT/MD файлом в этот чат. После загрузки можно сразу задать вопрос по документу.",
+  });
 }
 
 // Минимальное экранирование для inline-кода (Markdown legacy)

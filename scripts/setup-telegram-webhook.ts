@@ -22,9 +22,9 @@ const webhookUrl = `${appUrl.replace(/\/$/, "")}/api/telegram/webhook`;
 const normalizedAppUrl = appUrl.replace(/\/$/, "");
 
 const telegramCommands = [
-  { command: "start", description: "Запуск и справка" },
-  { command: "help", description: "Возможности бота" },
-  { command: "link", description: "Привязка аккаунта" },
+  { command: "start", description: "Старт и быстрые кнопки" },
+  { command: "help", description: "Помощь и UX-сценарии" },
+  { command: "link", description: "Привязка/перепривязка аккаунта" },
 ] as const;
 
 async function main() {
@@ -41,7 +41,7 @@ async function main() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       url: webhookUrl,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
       drop_pending_updates: true,
     }),
   });

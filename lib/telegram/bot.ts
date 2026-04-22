@@ -25,7 +25,7 @@ type SendMessageOptions = {
   parseMode?: "Markdown" | "MarkdownV2" | "HTML";
   replyToMessageId?: number;
   replyMarkup?: {
-    inline_keyboard: Array<Array<{ text: string; url: string }>>;
+    inline_keyboard: Array<Array<{ text: string; url: string } | { text: string; callback_data: string }>>;
   };
 };
 
@@ -106,6 +106,43 @@ export async function sendChatAction(
     });
   } catch {
     // best-effort, не критично
+  }
+}
+
+// ─── answerCallbackQuery ─────────────────────────────────────────────────────
+
+export async function answerCallbackQuery(
+  callbackQueryId: string,
+  opts?: {
+    text?: string;
+    showAlert?: boolean;
+  }
+): Promise<void> {
+  const url = buildTelegramApiUrl("answerCallbackQuery");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        ...(opts?.text ? { text: opts.text } : {}),
+        ...(opts?.showAlert ? { show_alert: true } : {}),
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "no body");
+      console.error(`[telegram/answerCallbackQuery] HTTP ${response.status}: ${body}`);
+    }
+  } catch (err) {
+    console.error("[telegram/answerCallbackQuery] Error:", err instanceof Error ? err.message : err);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
