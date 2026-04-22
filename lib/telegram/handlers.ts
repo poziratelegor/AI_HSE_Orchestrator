@@ -353,18 +353,42 @@ async function updateTelegramAuthState(
 ): Promise<void> {
   try {
     const supabase = getSupabaseServerClient();
-    const payload: Record<string, unknown> = {};
+    const payload: Record<string, unknown> = {
+      telegram_user_id: String(telegramUserId),
+      last_active_at: new Date().toISOString(),
+    };
     if (patch.userId !== undefined) payload.user_id = patch.userId;
     if (patch.fsmState !== undefined) payload.fsm_state = patch.fsmState;
     if (patch.fsmContext !== undefined) payload.fsm_context = patch.fsmContext;
 
-    await supabase
-      .from("telegram_users")
-      .update(payload)
-      .eq("telegram_user_id", String(telegramUserId));
+    await supabase.from("telegram_users").upsert(payload, { onConflict: "telegram_user_id" });
   } catch (err) {
     console.error("[telegram/updateAuthState] Error:", err instanceof Error ? err.message : err);
   }
+}
+
+async function resetTelegramAuthStateToAwaitEmail(telegramUserId: number): Promise<void> {
+  await updateTelegramAuthState(telegramUserId, {
+    userId: null,
+    fsmState: "await_email",
+    fsmContext: {},
+  });
+}
+
+async function setTelegramAuthAwaitFullName(telegramUserId: number, email: string): Promise<void> {
+  await updateTelegramAuthState(telegramUserId, {
+    userId: null,
+    fsmState: "await_full_name",
+    fsmContext: { email: email.trim() },
+  });
+}
+
+async function setTelegramAuthAuthorized(telegramUserId: number, userId: string): Promise<void> {
+  await updateTelegramAuthState(telegramUserId, {
+    userId,
+    fsmState: "authorized",
+    fsmContext: {},
+  });
 }
 
 async function authorizeByEmailAndFullName(opts: {
@@ -389,11 +413,7 @@ async function authorizeByEmailAndFullName(opts: {
       normalizeComparableText(row.full_name) === normalizeComparableText(opts.fullName);
     if (!isMatch) return { ok: false };
 
-    await updateTelegramAuthState(opts.telegramUserId, {
-      userId: row.id,
-      fsmState: "authorized",
-      fsmContext: {},
-    });
+    await setTelegramAuthAuthorized(opts.telegramUserId, row.id);
     return { ok: true, userId: row.id };
   } catch (err) {
     console.error("[telegram/authorizeByEmailAndFullName] Error:", err instanceof Error ? err.message : err);
@@ -534,7 +554,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   // /start, /help, /link
   if (message.text?.startsWith("/start")) {
     if (from) {
-      await updateTelegramAuthState(from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
+      await resetTelegramAuthStateToAwaitEmail(from.id);
     }
     await sendMessage({
       chatId,
@@ -558,7 +578,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
 
   if (message.text?.startsWith("/link")) {
     if (from) {
-      await updateTelegramAuthState(from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
+      await resetTelegramAuthStateToAwaitEmail(from.id);
     }
     await sendMessage({ chatId, text: MSG.ASK_EMAIL });
     return { ok: true };
@@ -575,11 +595,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
         return { ok: true };
       }
 
-      await updateTelegramAuthState(from.id, {
-        userId: null,
-        fsmState: "await_full_name",
-        fsmContext: { email: text.trim() },
-      });
+      await setTelegramAuthAwaitFullName(from.id, text);
       await sendMessage({ chatId, text: MSG.ASK_FULL_NAME, parseMode: "Markdown" });
       return { ok: true };
     }
@@ -597,7 +613,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
         fullName: text,
       });
       if (!auth.ok) {
-        await updateTelegramAuthState(from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
+        await resetTelegramAuthStateToAwaitEmail(from.id);
         await sendMessage({ chatId, text: MSG.AUTH_NOT_FOUND(links.signupUrl) });
         await sendMessage({ chatId, text: MSG.ASK_EMAIL });
         return { ok: true };
@@ -842,7 +858,7 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callbac
 
   if (payload === "relink") {
     if (callback.from) {
-      await updateTelegramAuthState(callback.from.id, { userId: null, fsmState: "await_email", fsmContext: {} });
+      await resetTelegramAuthStateToAwaitEmail(callback.from.id);
     }
     await sendMessage({ chatId, text: MSG.ASK_EMAIL });
     return;
