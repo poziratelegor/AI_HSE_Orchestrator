@@ -159,8 +159,15 @@ npx supabase db push
 # 1. Задать NEXT_PUBLIC_APP_URL публичным URL (не localhost)
 #    Для локальной разработки использовать туннель (см. ниже)
 
-# 2. Запустить скрипт настройки
-npx tsx scripts/setup-telegram-webhook.ts
+# 2. Задать обязательный секрет вебхука (>=16 символов)
+export TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+
+# 3. Запустить скрипт настройки
+TELEGRAM_BOT_TOKEN=... APP_URL=https://your-url.com TELEGRAM_WEBHOOK_SECRET="$TELEGRAM_WEBHOOK_SECRET" npx tsx scripts/setup-telegram-webhook.ts
+
+# 4. Post-check:
+#    - Скрипт сам вызывает getWebhookInfo и печатает статус.
+#    - Скрипт сам выполняет тестовый POST с неверным X-Telegram-Bot-Api-Secret-Token (ожидается 403).
 
 # Вывод:
 # ✓ Вебхук установлен: https://your-url.com/api/telegram/webhook
