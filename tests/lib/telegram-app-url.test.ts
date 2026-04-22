@@ -14,7 +14,6 @@ describe("getTelegramCtaLinks", () => {
     const links = getTelegramCtaLinks();
 
     expect(links.signupUrl).toBe("https://app.studyflow.ai/signup");
-    expect(links.profileUrl).toBe("https://app.studyflow.ai/dashboard/profile");
     expect(links.hasCanonicalUrl).toBe(true);
   });
 
@@ -24,7 +23,6 @@ describe("getTelegramCtaLinks", () => {
     const links = getTelegramCtaLinks();
 
     expect(links.signupUrl).toBe("http://localhost:3000/signup");
-    expect(links.profileUrl).toBe("http://localhost:3000/dashboard/profile");
     expect(links.hasCanonicalUrl).toBe(false);
   });
 });

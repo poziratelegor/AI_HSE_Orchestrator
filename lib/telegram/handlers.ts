@@ -3,7 +3,6 @@
  *
  * Принимает raw update от Telegram webhook → определяет тип сообщения
  * (текст / голос / аудио / видео-кружок / документ) → upsert telegram_users
- * → опционально привязывает аккаунт через /start link_<code>
  * → транскрибирует / сохраняет файл при необходимости
  * → вызывает orchestrate() и форматирует ответ.
  *
@@ -26,7 +25,6 @@ import {
   downloadTelegramFile,
 } from "@/lib/telegram/bot";
 import { formatOrchestrateResultForTelegram } from "@/lib/telegram/format";
-import { consumeLinkCode, parseStartLinkPayload } from "@/lib/telegram/link";
 import { getTelegramCtaLinks } from "@/lib/telegram/app-url";
 
 // ─── Telegram types (минимальное подмножество) ───────────────────────────────
@@ -158,33 +156,15 @@ const MSG = {
     "• Пришлите 📎 PDF/TXT/MD — я загружу его в вашу базу знаний",
     "",
     "*Команды:*",
-    "/link — привязать ваш аккаунт StudyFlow к этому Telegram",
     "/help — эта справка",
   ].join("\n"),
-  LINK_HINT: [
-    "🔗 *Привязка аккаунта Telegram*",
-    "",
-    "Чтобы я сохранял ваши задачи в трекер и присылал напоминания о дедлайнах,",
-    "мне нужно связать ваш Telegram с аккаунтом StudyFlow AI:",
-    "",
-    "1. Откройте сайт → раздел *Профиль*",
-    "2. Нажмите кнопку *«Привязать Telegram»*",
-    "3. Перейдите по полученной ссылке",
-    "",
-    "После этого все задачи и письма из чата автоматически попадут в ваш дашборд.",
-  ].join("\n"),
-  LINK_OK: "✅ Аккаунт успешно привязан! Теперь я сохраняю ваши задачи и шлю напоминания о дедлайнах.",
-  LINK_NOT_FOUND: "⚠️ Код привязки не найден или уже использован. Сгенерируйте новый в /dashboard/profile.",
-  LINK_EXPIRED: "⚠️ Срок действия кода истёк (код живёт 5 минут). Сгенерируйте новый в профиле.",
-  NEED_LINK: [
+  ACCESS_REQUIRED: [
     "🔒 *Доступ только для зарегистрированных пользователей.*",
     "",
-    "Чтобы пользоваться ассистентом, привяжите аккаунт StudyFlow AI:",
-    "1. Зарегистрируйтесь на сайте (если ещё не сделали)",
-    "2. Откройте *Профиль* → кнопка *«Привязать Telegram»*",
-    "3. Перейдите по полученной ссылке",
-    "",
-    "Команда /link — подробности.",
+    "Чтобы пользоваться ассистентом, зарегистрируйтесь в StudyFlow AI:",
+    "1. Перейдите по кнопке «Зарегистрироваться» ниже",
+    "2. Завершите регистрацию на сайте",
+    "3. После регистрации возвращайтесь в этот чат",
   ].join("\n"),
   RATE_LIMITED: "⚠️ Слишком много сообщений. Лимит: 30 запросов в час. Попробуйте позже.",
   RATE_LIMITED_HEAVY: "⚠️ Слишком много голосовых за час. Лимит: 5 голосовых/аудио в час.",
@@ -200,7 +180,6 @@ const MSG = {
   EMPTY_TEXT: "Напишите задачу текстом, отправьте голосовое сообщение или прикрепите файл. Для справки — /start.",
   PHOTO_NOT_SUPPORTED:
     "📷 Я пока не умею читать содержимое фотографий. Если на снимке текст — пришлите его как PDF/TXT, я его проиндексирую.",
-  DOC_NEED_LINK: "📎 Чтобы загружать документы в вашу базу знаний, привяжите аккаунт командой /link.",
   DOC_TOO_BIG: "⚠️ Файл слишком большой (лимит 20 МБ).",
   DOC_UNSUPPORTED:
     "⚠️ Пока поддерживаются только PDF, TXT и MD. Остальные форматы — через раздел «Документы» на сайте.",
@@ -217,20 +196,14 @@ const MSG = {
 function buildTelegramInlineKeyboard() {
   const links = getTelegramCtaLinks();
   return {
-    inline_keyboard: [[
-      { text: "Зарегистрироваться", url: links.signupUrl },
-      { text: "Открыть профиль", url: links.profileUrl },
-    ]],
+    inline_keyboard: [[{ text: "Зарегистрироваться", url: links.signupUrl }]],
   };
 }
 
 function buildTelegramActionKeyboard() {
   return {
     inline_keyboard: [
-      [
-        { text: "ℹ️ /help", callback_data: "help" },
-        { text: "🔁 Повторная привязка", callback_data: "relink" },
-      ],
+      [{ text: "ℹ️ /help", callback_data: "help" }],
       [
         { text: "❓ Задать вопрос", callback_data: "scenario:ask_question" },
         { text: "📎 Загрузить документ", callback_data: "scenario:upload_document" },
@@ -248,7 +221,6 @@ function withExplicitLinksFallback(text: string): string {
     "",
     "Ссылки:",
     `• Регистрация: ${links.signupUrl}`,
-    `• Профиль: ${links.profileUrl}`,
   ].join("\n");
 }
 
@@ -458,24 +430,8 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   if (from) void upsertTelegramUser(from);
 
   // ─── PUBLIC команды (доступны без привязки) ──────────────────────────────
-  // /start [link_<CODE>], /help, /link
+  // /start, /help
   if (message.text?.startsWith("/start")) {
-    const code = parseStartLinkPayload(message.text);
-    if (code && from) {
-      const result = await consumeLinkCode(code, from.id, {
-        username: from.username,
-        first_name: from.first_name,
-        last_name: from.last_name,
-      });
-      if (result.ok) {
-        await sendMessage({ chatId, text: MSG.LINK_OK });
-        return { ok: true };
-      }
-      const reply =
-        result.reason === "expired" ? MSG.LINK_EXPIRED : MSG.LINK_NOT_FOUND;
-      await sendMessage({ chatId, text: reply });
-      return { ok: true };
-    }
     await sendMessage({
       chatId,
       text: withExplicitLinksFallback(MSG.WELCOME),
@@ -495,24 +451,14 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
     return { ok: true };
   }
 
-  if (message.text?.startsWith("/link")) {
-    await sendMessage({
-      chatId,
-      text: withExplicitLinksFallback(MSG.LINK_HINT),
-      parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
-    });
-    return { ok: true };
-  }
-
-  // ─── AUTH GATE: всё остальное — только для привязанных ───────────────────
+  // ─── AUTH GATE: всё остальное — только для известных пользователей ───────
   // Любой функционал (orchestrate/voice/document) стоит денег (OpenAI) и
-  // имеет смысл только для известного userId. Без привязки — отказ.
+  // имеет смысл только для известного userId. Иначе — отказ.
   const userId = from ? await getLinkedUserId(from.id) : undefined;
   if (!userId) {
     await sendMessage({
       chatId,
-      text: withExplicitLinksFallback(MSG.NEED_LINK),
+      text: withExplicitLinksFallback(MSG.ACCESS_REQUIRED),
       parseMode: "Markdown",
       replyMarkup: buildTelegramInlineKeyboard(),
     });
@@ -699,10 +645,9 @@ async function runOrchestrate(
   }
 }
 
-type CallbackPayload = "help" | "relink" | "scenario:ask_question" | "scenario:upload_document";
+type CallbackPayload = "help" | "scenario:ask_question" | "scenario:upload_document";
 const ALLOWED_CALLBACK_PAYLOADS = new Set<CallbackPayload>([
   "help",
-  "relink",
   "scenario:ask_question",
   "scenario:upload_document",
 ]);
@@ -731,16 +676,6 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callbac
       text: withExplicitLinksFallback(MSG.WELCOME),
       parseMode: "Markdown",
       replyMarkup: buildTelegramActionKeyboard(),
-    });
-    return;
-  }
-
-  if (payload === "relink") {
-    await sendMessage({
-      chatId,
-      text: withExplicitLinksFallback(MSG.LINK_HINT),
-      parseMode: "Markdown",
-      replyMarkup: buildTelegramInlineKeyboard(),
     });
     return;
   }
