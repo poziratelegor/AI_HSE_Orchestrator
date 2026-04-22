@@ -127,6 +127,8 @@ const MAX_TEXT_INPUT = 15_000; // символов — защита от DoS т�
 const DOC_DAILY_LIMIT = 10;
 const DOC_MONTHLY_BYTES_LIMIT = 500 * 1024 * 1024; // 500 MB
 const AUTH_MATCH_THRESHOLD = 0.62;
+const AUTH_FILTER_MAX_PATTERN_LENGTH = 64;
+const AUTH_FILTER_MAX_TOKENS = 6;
 
 // Rate-limit: одинаковый per chatId для привязанных и непривязанных.
 // 30 запросов/час на chat_id.
@@ -273,6 +275,32 @@ function buildTelegramInlineKeyboard() {
 
 function normalizeComparableText(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru-RU");
+}
+
+function normalizePostgrestFilterValue(value: string): string {
+  return value
+    .replace(/[-–—]/g, " ")
+    .replace(/[(),{}[\].:*"'\\%!?&|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, AUTH_FILTER_MAX_PATTERN_LENGTH);
+}
+
+function getSafeProfileSearchTokens(value: string): string[] {
+  const normalized = normalizePostgrestFilterValue(value);
+  if (!normalized) return [];
+
+  return normalized
+    .split(" ")
+    .map((token) => token.replace(/[^\p{L}\p{N}]/gu, "").toLocaleLowerCase("ru-RU"))
+    .filter((token) => token.length >= 2)
+    .slice(0, AUTH_FILTER_MAX_TOKENS);
+}
+
+function buildProfileOrFilter(tokens: string[]): string {
+  return tokens
+    .flatMap((token) => [`full_name.ilike.%${token}%`, `group_name.ilike.%${token}%`])
+    .join(",");
 }
 
 function isLikelyEmail(value: string): boolean {
@@ -529,15 +557,18 @@ async function setTelegramAuthState(telegramUserId: number, state: AuthFlowState
   }
 }
 
-async function findProfileMatches(query: string, from: TelegramUser): Promise<ReturnType<typeof rankProfileMatches>> {
+async function findProfileMatches(query: string, from: TelegramUser, tokens?: string[]): Promise<ReturnType<typeof rankProfileMatches>> {
   const supabase = getSupabaseServerClient();
-  const normalizedQuery = query.trim();
-  if (!normalizedQuery) return [];
+  const safeTokens = tokens ?? getSafeProfileSearchTokens(query);
+  if (safeTokens.length === 0) return [];
+
+  const normalizedQuery = safeTokens.join(" ");
+  const orFilter = buildProfileOrFilter(safeTokens);
 
   const { data, error } = await supabase
     .from("profiles")
     .select("id, full_name, group_name, faculty, program, course_number")
-    .or(`full_name.ilike.%${normalizedQuery}%,group_name.ilike.%${normalizedQuery}%`)
+    .or(orFilter)
     .limit(50);
 
   if (error) {
@@ -723,7 +754,17 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   const userId = authRecord.userId;
   if (!userId) {
     if (from && message.text && authRecord.state === "await_profile") {
-      const matches = await findProfileMatches(message.text, from);
+      const safeTokens = getSafeProfileSearchTokens(message.text);
+      if (safeTokens.length === 0) {
+        await sendMessage({
+          chatId,
+          text: `${MSG.AUTH_RETRY}\n${MSG.AUTH_ASK_PROFILE}`,
+          parseMode: "Markdown",
+        });
+        return { ok: true };
+      }
+
+      const matches = await findProfileMatches(message.text, from, safeTokens);
       if (matches.length === 1) {
         const [best] = matches;
         const label = [best.profile.full_name, best.profile.group_name].filter(Boolean).join(" — ");
@@ -971,6 +1012,9 @@ function parseCallbackPayload(value: unknown): CallbackPayload | null {
 }
 
 export const __telegramHandlerTestables = {
+  buildProfileOrFilter,
+  getSafeProfileSearchTokens,
+  normalizePostgrestFilterValue,
   parseCallbackPayload,
 };
 
