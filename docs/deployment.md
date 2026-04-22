@@ -159,8 +159,9 @@ npx supabase db push
 # 1. Задать NEXT_PUBLIC_APP_URL публичным URL (не localhost)
 #    Для локальной разработки использовать туннель (см. ниже)
 
-# 2. Задать обязательный секрет вебхука (>=16 символов)
-export TELEGRAM_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+# 2. Убедиться, что TELEGRAM_WEBHOOK_SECRET уже задан в окружении
+#    (это постоянный секрет, его не нужно генерировать перед каждым запуском)
+# echo "$TELEGRAM_WEBHOOK_SECRET"
 
 # 3. Запустить скрипт настройки
 TELEGRAM_BOT_TOKEN=... APP_URL=https://your-url.com TELEGRAM_WEBHOOK_SECRET="$TELEGRAM_WEBHOOK_SECRET" npx tsx scripts/setup-telegram-webhook.ts
@@ -174,6 +175,14 @@ TELEGRAM_BOT_TOKEN=... APP_URL=https://your-url.com TELEGRAM_WEBHOOK_SECRET="$TE
 # ✓ Бот: @hse_ai_bot (StudyFlow AI)
 # ✓ Ожидающих обновлений: 0
 ```
+
+Если `TELEGRAM_WEBHOOK_SECRET` ещё не задан (первичная настройка), сгенерировать один раз:
+
+```bash
+openssl rand -hex 32
+```
+
+Сохранить значение в `.env.local` / Vercel / Docker Secrets и переиспользовать далее без регулярной ротации.
 
 ### Локальный туннель (для разработки)
 
