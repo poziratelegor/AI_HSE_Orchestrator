@@ -24,6 +24,9 @@ type SendMessageOptions = {
   text: string;
   parseMode?: "Markdown" | "MarkdownV2" | "HTML";
   replyToMessageId?: number;
+  replyMarkup?: {
+    inline_keyboard: Array<Array<{ text: string; url: string }>>;
+  };
 };
 
 export async function sendMessage(opts: SendMessageOptions): Promise<void> {
@@ -40,7 +43,8 @@ export async function sendMessage(opts: SendMessageOptions): Promise<void> {
         chat_id: opts.chatId,
         text: opts.text,
         parse_mode: opts.parseMode ?? "Markdown",
-        ...(opts.replyToMessageId ? { reply_to_message_id: opts.replyToMessageId } : {})
+        ...(opts.replyToMessageId ? { reply_to_message_id: opts.replyToMessageId } : {}),
+        ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
       }),
       signal: controller.signal
     });
