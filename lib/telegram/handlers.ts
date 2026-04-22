@@ -686,16 +686,24 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   // ─── PUBLIC команды (доступны без привязки) ──────────────────────────────
   // /start, /help, /link
   if (message.text?.startsWith("/start")) {
-    if (from) {
-      await resetTelegramAuthStateToAwaitEmail(from.id);
+    if (authRecord.userId) {
+      if (from) await setTelegramAuthState(from.id, "idle", {});
+      await sendMessage({
+        chatId,
+        text: withExplicitLinksFallback(MSG.WELCOME),
+        parseMode: "Markdown",
+        replyMarkup: buildTelegramActionKeyboard(),
+      });
+      return { ok: true };
     }
+
+    if (from) await setTelegramAuthState(from.id, "await_profile", {});
     await sendMessage({
       chatId,
-      text: withExplicitLinksFallback(MSG.WELCOME),
+      text: [withExplicitLinksFallback(MSG.WELCOME), "", MSG.AUTH_START, MSG.AUTH_ASK_PROFILE].join("\n"),
       parseMode: "Markdown",
-      replyMarkup: authRecord.userId ? buildTelegramActionKeyboard() : buildTelegramAuthStartKeyboard(),
+      replyMarkup: buildTelegramAuthStartKeyboard(),
     });
-    await sendMessage({ chatId, text: MSG.ASK_EMAIL });
     return { ok: true };
   }
 
@@ -993,6 +1001,54 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate["callbac
     await sendMessage({
       chatId,
       text: "❓ Напишите вопрос в свободной форме — я подберу подходящий сценарий и отвечу.",
+    });
+    return;
+  }
+
+  if (payload === "auth:start") {
+    const fromId = callback.from?.id;
+    if (fromId) await setTelegramAuthState(fromId, "await_profile", {});
+    await sendMessage({
+      chatId,
+      text: [MSG.AUTH_START, "", MSG.AUTH_ASK_PROFILE].join("\n"),
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramAuthStartKeyboard(),
+    });
+    return;
+  }
+
+  if (payload === "auth:cancel") {
+    const fromId = callback.from?.id;
+    if (fromId) await setTelegramAuthState(fromId, "idle", {});
+    await sendMessage({
+      chatId,
+      text: MSG.AUTH_CANCELLED,
+      parseMode: "Markdown",
+      replyMarkup: buildTelegramAuthStartKeyboard(),
+    });
+    return;
+  }
+
+  if (payload.startsWith("auth:confirm:")) {
+    const fromId = callback.from?.id;
+    if (!fromId) return;
+
+    const candidateUserId = payload.slice("auth:confirm:".length).trim();
+    const auth = await getTelegramAuthRecord(fromId);
+    if (auth.state !== "await_confirm" || auth.context.candidateUserId !== candidateUserId) {
+      await sendMessage({
+        chatId,
+        text: "⚠️ Подтверждение устарело. Нажмите «🔐 Начать авторизацию» и попробуйте снова.",
+      });
+      return;
+    }
+
+    await setTelegramAuthAuthorized(fromId, candidateUserId);
+    await setTelegramAuthState(fromId, "idle", {});
+    await sendMessage({
+      chatId,
+      text: MSG.AUTH_SUCCESS,
+      replyMarkup: buildTelegramActionKeyboard(),
     });
     return;
   }

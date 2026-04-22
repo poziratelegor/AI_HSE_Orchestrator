@@ -20,9 +20,13 @@ function getConfig(): { url: string; token: string } | null {
  * Execute a single Redis command via the Upstash REST API.
  * Body format: ["COMMAND", "arg1", "arg2", ...]
  */
-async function redisCommand(command: (string | number)[]): Promise<unknown> {
+type RedisCommandResult =
+  | { ok: true; result: unknown }
+  | { ok: false };
+
+async function redisCommand(command: (string | number)[]): Promise<RedisCommandResult> {
   const config = getConfig();
-  if (!config) return null;
+  if (!config) return { ok: false };
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5_000);
@@ -40,22 +44,22 @@ async function redisCommand(command: (string | number)[]): Promise<unknown> {
 
     if (!res.ok) {
       console.warn(`[redis] HTTP ${res.status} for command ${command[0]}`);
-      return null;
+      return { ok: false };
     }
 
     const json = (await res.json()) as { result: unknown; error?: string };
     if (json.error) {
       console.warn("[redis] command error:", json.error);
-      return null;
+      return { ok: false };
     }
-    return json.result ?? null;
+    return { ok: true, result: json.result ?? null };
   } catch (err) {
     if ((err as Error)?.name === "AbortError") {
       console.warn("[redis] request timed out (command:", command[0], ")");
     } else {
       console.warn("[redis] request failed:", err);
     }
-    return null;
+    return { ok: false };
   } finally {
     clearTimeout(timeout);
   }
@@ -65,9 +69,25 @@ async function redisCommand(command: (string | number)[]): Promise<unknown> {
  * GET a value by key. Returns null if key does not exist or Redis is unavailable.
  */
 export async function cacheGet(key: string): Promise<string | null> {
-  const result = await redisCommand(["GET", key]);
-  if (result === null || result === undefined) return null;
-  return String(result);
+  const response = await redisCommand(["GET", key]);
+  if (!response.ok) return null;
+  if (response.result === null || response.result === undefined) return null;
+  return String(response.result);
+}
+
+/**
+ * GET with availability metadata to separate "key is absent" from
+ * "Redis is unavailable".
+ */
+export async function cacheGetWithAvailability(
+  key: string
+): Promise<{ value: string | null; unavailable: boolean }> {
+  const response = await redisCommand(["GET", key]);
+  if (!response.ok) return { value: null, unavailable: true };
+  if (response.result === null || response.result === undefined) {
+    return { value: null, unavailable: false };
+  }
+  return { value: String(response.result), unavailable: false };
 }
 
 /**
@@ -99,8 +119,9 @@ export async function cacheSetIfAbsent(
   ttlSeconds: number
 ): Promise<boolean | null> {
   const result = await redisCommand(["SET", key, value, "EX", ttlSeconds, "NX"]);
-  if (result === null || result === undefined) return null;
-  return String(result).toUpperCase() === "OK";
+  if (!result.ok) return null;
+  if (result.result === null || result.result === undefined) return null;
+  return String(result.result).toUpperCase() === "OK";
 }
 
 /**
