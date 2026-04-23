@@ -589,7 +589,11 @@ function parseProfileQuery(query: string): { namePart: string; groupPart: string
   };
 }
 
-async function findProfileMatches(query: string, from: TelegramUser): Promise<ReturnType<typeof rankProfileMatches>> {
+async function findProfileMatches(
+  query: string,
+  from: TelegramUser,
+  tokens?: string[]
+): Promise<ReturnType<typeof rankProfileMatches>> {
   const supabase = getSupabaseServerClient();
   const safeTokens = tokens ?? getSafeProfileSearchTokens(query);
   if (safeTokens.length === 0) return [];
