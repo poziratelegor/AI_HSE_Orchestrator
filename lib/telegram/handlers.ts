@@ -599,9 +599,13 @@ async function findProfileMatches(
   if (safeTokens.length === 0) return [];
 
   const normalizedQuery = safeTokens.join(" ");
+  const { groupPart: normalizedGroupPart, nameTokens } = parseProfileQuery(query);
+  const sanitizedNameTokens = (tokens?.length ? tokens : nameTokens)
+    .map((token) => sanitizeSearchToken(token))
+    .filter(Boolean);
   const orFilter = buildProfileOrFilter(safeTokens);
 
-  let primaryQuery = supabase
+  const { data, error } = await supabase
     .from("profiles")
     .select("id, full_name, group_name, faculty, program, course_number")
     .or(orFilter)
