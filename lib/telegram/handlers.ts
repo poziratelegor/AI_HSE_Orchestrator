@@ -129,6 +129,8 @@ const DOC_MONTHLY_BYTES_LIMIT = 500 * 1024 * 1024; // 500 MB
 const AUTH_MATCH_THRESHOLD = 0.62;
 const AUTH_FILTER_MAX_PATTERN_LENGTH = 64;
 const AUTH_FILTER_MAX_TOKENS = 6;
+const AUTH_CONFIRM_TEXTS = new Set(["да", "yes", "ok", "ага", "подтверждаю"]);
+const AUTH_CANCEL_TEXTS = new Set(["нет", "no", "отмена"]);
 
 // Rate-limit: одинаковый per chatId для привязанных и непривязанных.
 // 30 запросов/час на chat_id.
@@ -830,6 +832,43 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
   // имеет смысл только для известного userId. Иначе — отказ.
   const userId = authRecord.userId;
   if (!userId) {
+    if (from && message.text && authRecord.state === "await_confirm") {
+      const normalizedAnswer = message.text.trim().toLowerCase();
+      if (AUTH_CONFIRM_TEXTS.has(normalizedAnswer)) {
+        const candidateUserId = authRecord.context.candidateUserId;
+        if (typeof candidateUserId !== "string" || candidateUserId.length === 0) {
+          await sendMessage({
+            chatId,
+            text: "⚠️ Подтверждение устарело. Нажмите «🔐 Начать авторизацию» и попробуйте снова.",
+          });
+          return { ok: true };
+        }
+
+        await setTelegramAuthAuthorized(from.id, candidateUserId);
+        await setTelegramAuthState(from.id, "idle", {});
+        await sendMessage({
+          chatId,
+          text: MSG.AUTH_SUCCESS,
+          replyMarkup: buildTelegramActionKeyboard(),
+        });
+        return { ok: true };
+      }
+
+      if (AUTH_CANCEL_TEXTS.has(normalizedAnswer)) {
+        await setTelegramAuthState(from.id, "idle", {});
+        await sendMessage({
+          chatId,
+          text: MSG.AUTH_CANCELLED,
+          parseMode: "Markdown",
+          replyMarkup: buildTelegramAuthStartKeyboard(),
+        });
+        return { ok: true };
+      }
+
+      await sendMessage({ chatId, text: "Ответьте “Да” или “Нет”" });
+      return { ok: true };
+    }
+
     if (from && message.text && authRecord.state === "await_profile") {
       const safeTokens = getSafeProfileSearchTokens(message.text);
       if (safeTokens.length === 0) {
