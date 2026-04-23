@@ -595,36 +595,17 @@ async function findProfileMatches(
   tokens?: string[]
 ): Promise<ReturnType<typeof rankProfileMatches>> {
   const supabase = getSupabaseServerClient();
-  const safeTokens = tokens ?? getSafeProfileSearchTokens(query);
+  const safeTokens = getSafeProfileSearchTokens(query);
   if (safeTokens.length === 0) return [];
 
   const normalizedQuery = safeTokens.join(" ");
   const orFilter = buildProfileOrFilter(safeTokens);
 
-  const { namePart, groupPart, nameTokens } = parseProfileQuery(normalizedQuery);
-  console.info("[telegram/auth] profile search parts:", { namePart, groupPart });
-
   let primaryQuery = supabase
     .from("profiles")
-    .select("id, full_name, group_name, faculty, program, course_number");
-
-  const normalizedGroupPart = sanitizeSearchToken(groupPart);
-  if (normalizedGroupPart) {
-    primaryQuery = primaryQuery.ilike("group_name", `%${normalizedGroupPart}%`);
-  }
-
-  const sanitizedNameTokens = nameTokens
-    .map((token) => sanitizeSearchToken(token))
-    .filter(Boolean)
-    .slice(0, 5);
-
-  if (sanitizedNameTokens.length > 0) {
-    primaryQuery = primaryQuery.or(
-      sanitizedNameTokens.map((token) => `full_name.ilike.%${token}%`).join(",")
-    );
-  }
-
-  const { data, error } = await primaryQuery.limit(50);
+    .select("id, full_name, group_name, faculty, program, course_number")
+    .or(orFilter)
+    .limit(50);
 
   if (error) {
     console.error("[telegram/auth] profile lookup error:", error.message);
@@ -884,7 +865,7 @@ export async function handleTelegramUpdate(update: unknown): Promise<{ ok: boole
         return { ok: true };
       }
 
-      const matches = await findProfileMatches(message.text, from, safeTokens);
+      const matches = await findProfileMatches(message.text, from);
       if (matches.length === 1) {
         const [best] = matches;
         const label = [best.profile.full_name, best.profile.group_name].filter(Boolean).join(" — ");
